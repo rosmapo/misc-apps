@@ -1,0 +1,90 @@
+5	• Biblia
+6	• Starý zákon
+7	• Pentateuch
+10	Kniha Genezis
+20	Kniha Exodus
+30	Kniha Levitikus
+40	Kniha Numeri
+50	Kniha Deuteronómium
+55	• Dejepisné knihy
+60	Kniha Jozue
+70	Kniha Sudcov
+80	Kniha Rút
+85	• Dejiny izraelskej monarchie
+90	Prvá kniha Samuelova
+100	Druhá kniha Samuelova
+110	Prvá kniha Kráľov
+120	Druhá kniha Kráľov
+130	Prvá kniha Kroník
+140	Druhá kniha Kroník
+145	• Babylonské zajatie
+150	Kniha Ezdrášova
+160	Kniha Nehemiášova
+170	Kniha Tobiáš
+180	Kniha Judita
+190	Kniha Ester
+195	• Hebrejská poézia
+196	• Poučné knihy
+220	Kniha Jób
+230	Kniha Žalmov
+240	Kniha Prísloví
+250	Kniha Kazateľ
+260	Pieseň piesní
+270	Kniha Múdrosti
+280	Kniha Sirachovho syna
+285	• Prorocké knihy a proroci
+290	Kniha proroka Izaiáša
+300	Kniha proroka Jeremiáša
+310	Kniha Náreky
+320	Kniha proroka Barucha
+330	Kniha proroka Ezechiela
+340	Kniha proroka Daniela
+350	Kniha proroka Ozeáša
+360	Kniha proroka Joela
+370	Kniha proroka Amosa
+380	Kniha proroka Abdiáša
+390	Kniha proroka Jonáša
+400	Kniha proroka Micheáša
+410	Kniha proroka Nahuma
+420	Kniha proroka Habakuka
+430	Kniha proroka Sofoniáša
+440	Kniha proroka Aggea
+450	Kniha proroka Zachariáša
+455	Kniha proroka Malachiáša
+460	• Helenizmus a Machabejci
+461	• Knihy Machabejcov
+462	Prvá kniha Makabejcov
+464	Druhá kniha Makabejcov
+466	• Mesianizmus a Mesiáš
+467	• Nový zákon
+468	• I. Evanjeliá
+470	Evanjelium podľa Matúša
+480	Evanjelium podľa Marka
+490	Evanjelium podľa Lukáša
+500	Evanjelium podľa Jána
+510	Skutky apoštolov
+515	• Apoštol Pavol a jeho listy
+520	List Rimanom
+530	Prvý list Korinťanom
+540	Druhý list Korinťanom
+550	List Galaťanom
+560	List Efezanom
+570	List Filipanom
+580	List Kolosanom
+590	Prvý list Solúnčanom
+600	Druhý list Solúnčanom
+605	• Pastorálne listy
+610	Prvý list Timotejovi
+620	Druhý list Timotejovi
+630	List Títovi
+640	List Filemonovi
+650	List Hebrejom
+655	• Katolícke listy
+660	Jakubov list
+670	Prvý Petrov list
+680	Druhý Petrov list
+690	Prvý Jánov list
+700	Druhý Jánov list
+710	Tretí Jánov list
+720	Júdov list
+730	Zjavenie apoštola Jána

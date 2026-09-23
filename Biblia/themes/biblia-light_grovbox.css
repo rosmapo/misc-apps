@@ -1,0 +1,245 @@
+            /* - Globalne farby - */
+            /* Gruvbox Light palette:
+               bg:  #fbf1c7  bg1: #ebdbb2  bg2: #d5c4a1  bg3: #bdae93  bg4: #a89984
+               fg:  #3c3836  fg1: #504945  fg2: #665c54  fg3: #7c6f64  fg4: #928374
+               red: #9d0006  green: #427b58  yellow: #b57614  blue: #076678
+               purple: #8f3f71  aqua: #427b58  orange: #af3a03
+            */
+
+            /* - Globalne farby - */
+            window, .view, scrolledwindow > viewport {
+                background-color: #fbf1c7;
+                color: #3c3836;
+            }
+
+            /* - Header bar - */
+            headerbar {
+                background-color: #ebdbb2;
+                color: #3c3836;
+                border-bottom: 1px solid #bdae93;
+                min-height: 42px;
+                padding: 2px 6px;
+            }
+            headerbar button, headerbar togglebutton {
+                background-color: #d5c4a1;
+                border: 1px solid #bdae93;
+                color: #3c3836;
+                border-radius: 6px;
+                padding: 3px 7px;
+                min-height: 24px;
+            }
+            headerbar button:hover, headerbar togglebutton:hover {
+                background-color: #bdae93;
+                color: #282828;
+            }
+            headerbar button:active,
+            headerbar togglebutton:checked {
+                background-color: #a89984;
+                color: #282828;
+                border-color: #928374;
+            }
+            headerbar button:disabled {
+                opacity: 0.35;
+            }
+            headerbar .linked button,
+            headerbar .linked togglebutton {
+                border-radius: 0;
+            }
+            headerbar .linked button:first-child,
+            headerbar .linked togglebutton:first-child {
+                border-radius: 6px 0 0 6px;
+            }
+            headerbar .linked button:last-child,
+            headerbar .linked togglebutton:last-child {
+                border-radius: 0 6px 6px 0;
+            }
+
+            /* - Lavy panel - */
+            .navigation-sidebar {
+                background-color: #ebdbb2;
+                color: #3c3836;
+            }
+            .navigation-sidebar row {
+                border-radius: 6px;
+                padding: 1px 4px;
+            }
+            .navigation-sidebar row:selected {
+                background-color: #cfe0da;
+                color: #282828;
+            }
+            .navigation-sidebar row:hover:not(:selected) {
+                background-color: #d5c4a1;
+            }
+
+            .left-tab-btn {
+                border: 1px solid #bdae93;
+                color: #665c54;
+                font-size: 0.95em;
+                font-weight: normal;
+                padding: 4px 2px;
+                border-radius: 0;
+            }
+            .left-tab-btn:first-child { border-radius: 6px 0 0 6px; }
+            .left-tab-btn:last-child  { border-radius: 0 6px 6px 0; }
+            .left-tab-btn:hover {
+                background-color: #d5c4a1;
+                color: #282828;
+            }
+            .left-tab-btn:checked {
+                background-color: #cfe0da;
+                color: #282828;
+                font-weight: bold;
+            }
+
+            paned > separator {
+                background-color: #bdae93;
+                min-width: 1px;
+            }
+            separator {
+                background-color: #d5c4a1;
+                min-height: 1px;
+            }
+
+            /* - Obsah - verse - */
+            .verse-number {
+                color: #076678;
+                font-weight: bold;
+                font-size: 0.80em;
+                min-width: 28px;
+            }
+            .verse-text {
+                font-size: 1.1em;
+                line-height: 1.65;
+                color: #3c3836;
+            }
+            /* Ježišove slová (<J>...</J>) – farba je nastavená
+               priamo v Pango markup funkciou verse_text_to_pango() v bibliam.py */
+            .section-title {
+                font-weight: bold;
+                font-style: italic;
+                margin-top: 14px;
+                margin-bottom: 2px;
+                color: #b57614;
+                font-size: 1.2em;
+            }
+
+            .title-2 {
+                color: #076678;
+            }
+
+            .verse-highlight {
+                background-color: alpha(#3c3836, 0.06);
+                border-radius: 6px;
+            }
+            .verse-highlight-comm {
+                background-color: alpha(#427b58, 0.14);
+                border-radius: 6px;
+            }
+
+            /* - Tlacidla pri versoch - */
+            .comm-btn {
+                padding: 0px;
+                min-width: 18px;
+                min-height: 18px;
+                border-radius: 9px;
+                color: #458588;
+                opacity: 0.55;
+            }
+            .comm-btn:hover { opacity: 1.0; }
+            .comm-btn-active {
+                color: #427b58;
+                opacity: 1.0;
+            }
+            .bookmark-btn {
+                padding: 0px;
+                min-width: 18px;
+                min-height: 18px;
+                border-radius: 9px;
+                opacity: 0.40;
+            }
+            .bookmark-btn:hover { opacity: 1.0; }
+            .bookmark-btn-on {
+                color: #d79921;
+                opacity: 0.9;
+            }
+            .note-btn {
+                padding: 0px;
+                min-width: 18px;
+                min-height: 18px;
+                border-radius: 9px;
+                opacity: 0.40;
+            }
+            .note-btn:hover { opacity: 1.0; }
+            .note-btn-on {
+                color: #b16286;
+                opacity: 0.9;
+            }
+
+            /* - Komentarovy panel - */
+            .comm-panel {
+                background-color: #ebdbb2;
+                border-top: 1px solid #bdae93;
+            }
+            .comm-text {
+                font-size: 0.97em;
+                line-height: 1.65;
+                color: #3c3836;
+            }
+            .comm-text a {
+                color: #076678;
+                text-decoration: none;
+            }
+            .comm-text a:hover { text-decoration: underline; }
+
+            .bookmarks-list image.bookmark-btn-on { color: #b57614; }
+            .bookmarks-list image.note-btn-on     { color: #8f3f71; }
+
+            /* - Slovnik - */
+            .dict-topic-lbl { font-weight: bold; color: #3c3836; }
+            .dict-text {
+                font-size: 1.1em;
+                line-height: 1.6;
+                color: #3c3836;
+            }
+            .dict-text a       { color: #076678; text-decoration: none; }
+            .dict-text a:hover { text-decoration: underline; }
+            .dict-placeholder  { color: alpha(#3c3836, 0.55); }
+
+            .note-expand-btn { padding: 0px 2px; min-height: 18px; opacity: 0.75; }
+            .note-expand-btn:hover { opacity: 1.0; }
+
+            .caption { color: alpha(#3c3836, 0.50); }
+
+            /* - Vyhladavanie - */
+            .search-bar, .search-bar > revealer > box {
+                background-color: #ebdbb2;
+                border-bottom: 1px solid #bdae93;
+            }
+            entry {
+                background-color: #f9f5d7;
+                color: #3c3836;
+                border: 1px solid #bdae93;
+                border-radius: 6px;
+            }
+            entry:focus {
+                border-color: #458588;
+            }
+            dropdown, combobox {
+                background-color: #f9f5d7;
+                color: #3c3836;
+                border: 1px solid #bdae93;
+                border-radius: 6px;
+            }
+
+            /* - Farby skratiek kníh v ľavom paneli - */
+            .book-pentateuch { color: #b57614; font-weight: bold; }
+            .book-historical  { color: #076678; font-weight: bold; }
+            .book-wisdom      { color: #427b58; font-weight: bold; }
+            .book-prophets    { color: #8f3f71; font-weight: bold; }
+            .book-maccabees   { color: #af3a03; font-weight: bold; }
+            .book-gospels     { color: #458588; font-weight: bold; }
+            .book-acts        { color: #b57614; font-weight: bold; }
+            .book-paul        { color: #076678; font-weight: bold; }
+            .book-catholic    { color: #427b58; font-weight: bold; }
+            .book-revelation  { color: #9d0006; font-weight: bold; }
+            .book-default     { color: #3c3836; font-weight: bold; }

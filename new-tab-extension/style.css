@@ -1,0 +1,885 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    background: var(--bg-color, #1c2027);
+    min-height: 100vh;
+    color: var(--bookmark-text-color, #bababa);
+    
+    /* Pre obrázok pozadia (pridané v script.js) */
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+}
+
+/* ========== BOOKMARK BAR ========== */
+#b {
+    background: var(--bookmark-bar-color, #1c2027);
+    border-bottom: 0px solid #333;
+    font-size: 18px;
+    height: 80px;
+    display: flex; /* Bude ovládané cez JS (flex/none) */
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+    padding: 0 8px;
+    white-space: nowrap;
+}
+
+#b a {
+    color: var(--bookmark-text-color, #bababa);
+    display: inline-block;
+    margin: 0 4px;
+    max-width: 150px;
+    overflow: hidden;
+    padding: 0 10px;
+    text-decoration: none;
+    text-overflow: ellipsis;
+    transition: transform 0.2s, opacity 0.2s;
+}
+
+#b a:hover {
+    border-radius: 2px;
+    transform: scale(1.05);
+    opacity: 0.9;
+}
+
+#b img, 
+#b .favicon-placeholder { 
+    display: inline-block;
+    height: 16px;
+    margin-right: 4px;
+    vertical-align: middle;
+    width: 16px;
+    text-align: center;
+    font-size: 14px;
+    line-height: 16px;
+    overflow: hidden;
+}
+
+#b .f {
+    cursor: pointer;
+    display: inline-block;
+    padding: 0 10px;
+    position: relative;
+    color: var(--bookmark-text-color, #bababa);
+    transition: transform 0.2s, opacity 0.2s;
+}
+
+#b .f:hover {
+    border-radius: 2px;
+    transform: scale(1.05);
+    opacity: 0.9;
+}
+
+#b .f.active-folder {
+    background: #2a2a2a; 
+    border-radius: 2px;
+}
+
+/* ========== FOLDER POPUP ========== */
+.folder-popup {
+    background: #1c2027; 
+    border: 1px solid #444;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    display: none;
+    max-height: 800px;
+    max-width: 300px;
+    overflow-y: auto;
+    position: absolute;
+    z-index: 1000;
+}
+
+.folder-popup.active {
+    display: block;
+}
+
+.folder-popup a {
+    color: var(--bookmark-text-color, #bababa);
+    display: flex;
+    align-items: center;
+    margin: 0;
+    max-width: none;
+    padding: 8px 12px;
+    text-decoration: none;
+    font-size: 16px;
+}
+
+.folder-popup a:hover {
+    background: #3a3a3a;
+}
+
+.folder-popup a img,
+.folder-popup a .favicon-placeholder {
+    margin-right: 8px;
+    flex-shrink: 0;
+}
+
+/* ========== KONTAJNER ========== */
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 10px 20px;
+    position: relative;
+}
+
+.header {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-bottom: 10px;
+    position: relative;
+    width: 100%;
+}
+
+/* ========== TLAČIDLO NASTAVENÍ ========== */
+.settings-btn {
+    position: fixed;
+    right: 25px;
+    top: 25px;
+    background: rgba(255, 255, 255, 0.0);
+    border: 0px solid rgba(255, 255, 255, 0.5);
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    transition: all 0.3s;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.0); 
+    z-index: 1010;
+    color: #b5b5b5;
+}
+
+.settings-btn:hover {
+    background: rgba(255, 255, 255, 0.5);
+    transform: rotate(90deg); 
+    box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+}
+
+/* ========== REŽIM ÚPRAV ========== */
+#grid.editing-active {
+    outline: 2px dashed rgba(255, 255, 255, 0.7); 
+    outline-offset: 5px;
+    transition: outline 0.3s;
+}
+
+#grid.editing-active .card {
+    cursor: grab;
+}
+
+#grid.editing-active .card:active {
+    cursor: grabbing;
+}
+
+#grid.editing-active .card:hover {
+    transform: none;
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+}
+
+.sortable-ghost {
+    opacity: 0.2 !important; 
+    background-color: rgba(255, 255, 255, 0.1); 
+    border: 2px dashed white;
+    transform: scale(0.9);
+}
+
+/* ========== DÁTUM A ČAS ========== */
+#dateTime {
+    color: var(--date-time-color, #bababa);
+    font-size: 50px;
+    font-weight: 300;
+    cursor: pointer;
+    transition: transform 0.2s, opacity 0.2s;
+    user-select: none;
+    /* display: block; Bude ovládané cez JS (block/none) */
+}
+
+#dateTime:hover {
+    transform: scale(1.05);
+    opacity: 0.9;
+}
+
+/* ========== BIBLICKÝ VERŠ ========== */
+.bible-verse {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 10px;
+    background: rgba(255, 255, 255, 0);
+    border-radius: 16px;
+    text-align: center;
+    border: 0px solid rgba(255, 255, 255, 0.2);
+    display: flex; /* Bude ovládané cez JS (flex/none) */
+    flex-direction: column;
+    justify-content: start;
+    min-height: 200px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+}
+
+.verse-text {
+    font-size: 20px;
+    line-height: 1.6;
+    color: var(--verse-text-color, #bababa);
+    font-style: italic;
+    margin-bottom: 5px;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.verse-reference {
+    font-size: 16px;
+    color: var(--reference-color, #bababa);
+    opacity: 0.7;
+    font-weight: 500;
+}
+
+/* ========== GRID ========== */
+.grid {
+    display: grid;
+    grid-template-columns: repeat(var(--grid-columns, 6), minmax(0, 1fr));
+    gap: var(--gap-vertical, 20px) var(--gap-horizontal, 20px); 
+    margin-bottom: 20px;
+    margin-top: 40px;
+    width: var(--grid-width, 100%);
+    margin-left: auto;
+    margin-right: auto;
+}
+
+/* ========== KARTY ========== */
+.card {
+    background: transparent;
+    overflow: visible;
+    cursor: pointer;
+    transition: transform 0.2s;
+    position: relative;
+    width: 100%;
+    height: auto; 
+    z-index: 1; 
+}
+
+.card:hover {
+    transform: translateY(-4px);
+    z-index: 10; 
+}
+
+.card-image {
+    width: 100%;
+    aspect-ratio: var(--card-aspect-ratio, 1 / 1); 
+    position: relative;
+    background: transparent; 
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #999;
+    font-size: 48px;
+    border-radius: var(--card-border-radius, 12px); 
+    box-shadow: none; 
+    transition: box-shadow 0.2s;
+    overflow: hidden;
+}
+
+.card-image img {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: var(--card-border-radius, 12px);
+}
+
+.card-content {
+    padding: 5px 4px;
+    text-align: center;
+    background: transparent;
+    position: static;
+}
+
+.card-title {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--bookmark-text-color, #bababa);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+/* ========== KONTEXTOVÉ MENU ========== */
+.context-menu {
+    display: none;
+    position: fixed;
+    background: #2d2d2d;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+    min-width: 150px;
+    padding: 4px 0;
+    z-index: 2000;
+    user-select: none;
+    border: 1px solid rgba(255,255,255,0.15);
+}
+
+.context-menu-item {
+    padding: 10px 15px;
+    font-size: 14px;
+    color: #ffffff;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: background 0.2s;
+}
+
+.context-menu-item:hover {
+    background: rgba(255,255,255,0.1);
+}
+
+.context-menu-item.delete {
+    color: #ed333b;
+}
+
+.context-menu-item.delete:hover {
+    background: rgba(237,51,59,0.15);
+}
+
+/* ========== MODAL ========== */
+.modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.7);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(4px);
+}
+
+.modal.active {
+    display: flex;
+}
+
+.modal-content {
+    background: #242424;
+    border-radius: 12px;
+    padding: 32px;
+    width: 90%;
+    max-width: 500px;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    border: 1px solid rgba(255,255,255,0.1);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+}
+
+.modal-title {
+    font-size: 24px;
+    font-weight: 600;
+    color: #ffffff;
+}
+
+.close-btn {
+    background: rgba(255,255,255,0.1);
+    border: none;
+    font-size: 20px;
+    color: #ffffff;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    transition: all 0.2s;
+}
+
+.close-btn:hover {
+    background: rgba(255,255,255,0.15);
+}
+
+/* ========== FORMULÁR (Pre modal záložky) ========== */
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-label {
+    display: block;
+    font-size: 14px;
+    font-weight: 600;
+    color: #ffffff;
+    margin-bottom: 8px;
+}
+
+.form-input {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 6px;
+    font-size: 14px;
+    transition: all 0.2s;
+    background: #2d2d2d;
+    color: #ffffff;
+}
+
+.form-input:focus {
+    outline: none;
+    border-color: #3584e4;
+    background: #383838;
+}
+
+.image-preview {
+    width: 100%;
+    height: 200px;
+    border: 2px dashed rgba(255,255,255,0.2);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 8px;
+    overflow: hidden;
+    background: #2d2d2d;
+}
+
+.image-preview img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+.image-preview-text {
+    color: rgba(255,255,255,0.5);
+    font-size: 14px;
+}
+
+.form-buttons {
+    display: flex;
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.btn {
+    flex: 1;
+    padding: 12px 24px;
+    border: none;
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn:hover {
+    transform: translateY(-1px);
+}
+
+.btn-primary {
+    background: #3584e4;
+    color: white;
+}
+
+.btn-primary:hover {
+    background: #1c71d8;
+}
+
+.btn-secondary {
+    background: rgba(255,255,255,0.1);
+    color: #ffffff;
+    border: 1px solid rgba(255,255,255,0.2);
+}
+
+.btn-secondary:hover {
+    background: rgba(255,255,255,0.15);
+}
+
+/* ========== PRÁZDNY STAV ========== */
+.empty-state {
+    text-align: center;
+    color: white;
+    padding: 60px 20px;
+}
+
+.empty-state h2 {
+    font-size: 24px;
+    margin-bottom: 12px;
+}
+
+.empty-state p {
+    font-size: 16px;
+    opacity: 0.9;
+}
+
+/* ================================== */
+/* === SETTINGS MODAL (TMAVÁ TÉMA) ==== */
+/* ================================== */
+
+.settings-modal-content {
+    max-width: 650px; 
+    padding: 24px;
+    overflow: visible;
+    background: #242424;
+    border: 1px solid rgba(255,255,255,0.1);
+}
+
+.modal-header {
+    margin-bottom: 20px;
+}
+
+.btn-compact {
+    padding: 8px 16px;
+    font-size: 13px;
+    flex: 1;
+    white-space: nowrap;
+}
+
+.btn.active, #toggleEditModeBtn.active {
+    background: #33d17a;
+    color: #1e1e1e;
+}
+
+.btn.active:hover, #toggleEditModeBtn.active:hover {
+    background: #2ec27e;
+}
+
+.settings-buttons-top {
+    display: flex;
+    gap: 12px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    margin-bottom: 20px;
+}
+
+.settings-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.settings-section {
+    background: #2d2d2d;
+    padding: 14px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.15);
+}
+
+.section-title {
+    /* ODSTRÁNENÉ z HTML, ale pravidlo tu môže zostať */
+    font-size: 13px;
+    font-weight: 700;
+    color: #ffffff;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.settings-row-layout {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+}
+
+.settings-row-colors {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px 12px;
+}
+
+.setting-item, .setting-item-compact, .setting-item-text {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.setting-label {
+    font-size: 14px;
+    font-weight: 400;
+    color: rgba(255,255,255,0.9);
+    margin-bottom: 0;
+}
+
+.setting-input, .setting-input-small, .setting-input-tiny { 
+    padding: 6px 10px;
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 6px;
+    font-size: 13px;
+    transition: all 0.2s;
+    width: 100%;
+    background: #383838;
+    color: #ffffff;
+}
+
+.setting-input:focus, .setting-input-small:focus, .setting-input-tiny:focus {
+    outline: none;
+    border-color: #3584e4;
+    background: #424242;
+}
+
+/* Wrapper pre farebný box + textový input */
+.color-input-wrapper-compact {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    position: relative;
+}
+
+.color-preview-small {
+    width: 36px;
+    height: 36px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.2);
+    cursor: pointer;
+    transition: all 0.2s;
+    padding: 0;
+    flex-shrink: 0;
+    background: var(--color-value, #000);
+    position: relative;
+}
+
+.color-preview-small:hover {
+    border-color: #3584e4;
+}
+
+/* Skrytý color input umiestnený priamo nad vizuálnym tlačidlom */
+.color-input-wrapper-compact input[type="color"] {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 36px;
+    height: 36px;
+    opacity: 0;
+    cursor: pointer;
+    border: none;
+    padding: 0;
+}
+
+.setting-input-color {
+    padding: 6px 10px;
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 6px;
+    font-size: 13px;
+    transition: all 0.2s;
+    flex: 1;
+    height: 36px;
+    background: #383838;
+    color: #ffffff;
+}
+
+.setting-input-color:focus {
+    outline: none;
+    border-color: #3584e4;
+    background: #424242;
+}
+
+.color-opacity-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 8px;
+}
+
+.opacity-slider {
+    flex: 1;
+    height: 6px;
+    -webkit-appearance: none;
+    background: rgba(255,255,255,0.2);
+    border-radius: 3px;
+    outline: none;
+    margin: 0;
+    padding: 0;
+}
+
+.opacity-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #3584e4;
+    cursor: pointer;
+}
+
+.opacity-slider::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #3584e4;
+    cursor: pointer;
+    border: none;
+}
+
+.opacity-value {
+    font-size: 12px;
+    color: rgba(255,255,255,0.7);
+    min-width: 40px;
+    text-align: right;
+    flex-shrink: 0;
+    font-weight: 600;
+}
+
+.settings-buttons-bottom {
+    display: flex;
+    gap: 12px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255,255,255,0.1);
+    margin-top: 20px;
+}
+
+/* ========== ŠTÝLY PRE VÝBER OBRÁZKA POZADIA ========== */
+
+.setting-file-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 8px; 
+}
+
+.setting-input-file {
+    flex: 1;
+    font-size: 12px;
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 6px;
+    padding: 5px 8px;
+    background: #383838;
+    color: #ffffff;
+    height: 36px; 
+    box-sizing: border-box; 
+    line-height: 24px; 
+}
+
+.setting-input-file::file-selector-button {
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: none;
+    background: rgba(255,255,255,0.1);
+    color: #ffffff;
+    cursor: pointer;
+    margin-right: 8px;
+    height: 24px; 
+    margin-top: -1px;
+    transition: background 0.2s;
+}
+
+.setting-input-file::file-selector-button:hover {
+    background: rgba(255,255,255,0.15);
+}
+
+.btn-clear-image {
+    flex-shrink: 0;
+    width: 36px; 
+    height: 36px; 
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.2);
+    background: rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.7);
+    font-size: 20px;
+    font-weight: bold;
+    cursor: pointer;
+    padding: 0;
+    line-height: 32px; 
+    transition: all 0.2s;
+}
+
+.btn-clear-image:hover {
+    background: rgba(237,51,59,0.2);
+    color: #ed333b;
+    border-color: rgba(237,51,59,0.3);
+}
+
+/* ========== NOVÉ ŠTÝLY PRE PREPÍNAČE (TOGGLES) ========== */
+
+.settings-row-toggles {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr); /* 4 stĺpce */
+    gap: 12px;
+    align-items: center;
+}
+
+.setting-item-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #383838;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.2);
+    height: 40px;
+    box-sizing: border-box;
+}
+
+.setting-item-toggle .setting-label {
+    cursor: pointer;
+    color: rgba(255,255,255,0.9);
+}
+
+.setting-toggle {
+    /* Jednoduchý checkbox, ale zväčšený */
+    transform: scale(1.4);
+    cursor: pointer;
+    margin-left: 8px;
+    accent-color: #3584e4;
+}
+
+.settings-row-toggles .btn-compact {
+    flex: 1;
+    width: 100%;
+    height: 40px;
+    padding: 8px 12px;
+}
+
+
+/* ========== RESPONZÍVNY DIZAJN ========== */
+@media (max-width: 768px) {
+    .settings-row-layout {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .settings-row-colors {
+        grid-template-columns: 1fr;
+    }
+
+    /* NOVÉ: Zmena toggle riadku na 2x2 */
+    .settings-row-toggles {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .settings-modal-content {
+        padding: 20px;
+        max-width: 95%;
+    }
+    
+    .btn-compact {
+        font-size: 12px;
+        padding: 7px 12px;
+    }
+
+    .settings-buttons-top {
+        flex-direction: column;
+    }
+    
+    #b {
+        font-size: 14px;
+        height: 60px;
+    }
+    
+    #dateTime {
+        font-size: 24px;
+    }
+    
+    .verse-text {
+        font-size: 18px;
+    }
+}

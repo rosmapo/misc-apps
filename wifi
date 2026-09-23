@@ -1,0 +1,987 @@
+#!/usr/bin/env python3
+"""
+connex - Modern Wi-Fi Manager for Hyprland/ArchLinux
+Enhanced version with advanced features
+Dependencies: python-gobject gtk4 libadwaita networkmanager libnotify
+"""
+import gi
+import subprocess
+import shlex
+import threading
+import argparse
+import sys
+import os
+import json
+from datetime import datetime
+from pathlib import Path
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+gi.require_version('Notify', '0.7')
+from gi.repository import Gtk, GObject, GLib, Gdk, Notify, Adw, Gio, Pango
+
+CONFIG_DIR = Path.home() / ".config" / "connex"
+HISTORY_FILE = CONFIG_DIR / "history.log"
+DEBUG_MODE = False
+
+def log_debug(msg):
+    if DEBUG_MODE:
+        print(f"[DEBUG] {msg}")
+
+def ensure_config_dir():
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+def log_connection(ssid, signal, success, error_msg=""):
+    ensure_config_dir()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    status = "SUCCESS" if success else "FAILED"
+    log_entry = f"{timestamp} | {status} | {ssid} | Signal: {signal}%"
+    if error_msg:
+        log_entry += f" | Error: {error_msg}"
+    log_entry += "\n"
+    with open(HISTORY_FILE, "a") as f:
+        f.write(log_entry)
+    log_debug(f"Logged: {log_entry.strip()}")
+
+
+def get_saved_connections():
+    """Vráti zoznam uložených WiFi profilov"""
+    try:
+        res = subprocess.run(
+            ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"],
+            capture_output=True, text=True, timeout=6
+        )
+        saved = set()
+        for line in res.stdout.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 2 and parts[1] == "802-11-wireless":
+                saved.add(parts[0])
+        return saved
+    except Exception as e:
+        log_debug(f"get_saved_connections error: {e}")
+        return set()
+
+
+class HiddenNetworkDialog(Adw.Dialog):
+    def __init__(self, parent_window):
+        super().__init__(title="Connect to Hidden Network")
+        self.set_content_width(420)
+        self.parent_window = parent_window
+
+        toolbar_view = Adw.ToolbarView()
+        self.set_child(toolbar_view)
+
+        header = Adw.HeaderBar()
+        header.set_show_end_title_buttons(False)
+        header.set_title_widget(Adw.WindowTitle(title="Hidden Network"))
+        cancel_btn = Gtk.Button(label="Cancel")
+        cancel_btn.connect("clicked", lambda b: self.close())
+        header.pack_start(cancel_btn)
+        self.connect_btn = Gtk.Button(label="Connect")
+        self.connect_btn.add_css_class("suggested-action")
+        self.connect_btn.connect("clicked", self._on_connect_clicked)
+        header.pack_end(self.connect_btn)
+        toolbar_view.add_top_bar(header)
+
+        page = Adw.PreferencesPage()
+        group = Adw.PreferencesGroup(description="Enter hidden network details:")
+        page.add(group)
+
+        self.ssid_row = Adw.EntryRow(title="SSID")
+        self.ssid_row.connect("apply", lambda r: self.connect_btn.emit("clicked"))
+        group.add(self.ssid_row)
+
+        # Adw.PasswordEntryRow already has a built-in show/hide toggle,
+        # so there's no need for a separate eye-icon button anymore.
+        self.password_row = Adw.PasswordEntryRow(title="Password (leave empty for open network)")
+        self.password_row.connect("apply", lambda r: self.connect_btn.emit("clicked"))
+        group.add(self.password_row)
+
+        toolbar_view.set_content(page)
+
+    def _on_connect_clicked(self, button):
+        ssid = self.ssid_row.get_text().strip()
+        password = self.password_row.get_text()
+        if not ssid:
+            self.parent_window.show_error("SSID is required")
+            return
+        self.close()
+        self.parent_window.connect_to_network(ssid, password, hidden=True)
+
+
+class PasswordDialog(Adw.Dialog):
+    def __init__(self, parent_window, ssid, security, signal="0"):
+        super().__init__(title=f"Connect to {ssid}")
+        self.set_content_width(420)
+        self.parent_window = parent_window
+        self.ssid = ssid
+        self.signal = signal
+
+        toolbar_view = Adw.ToolbarView()
+        self.set_child(toolbar_view)
+
+        header = Adw.HeaderBar()
+        header.set_show_end_title_buttons(False)
+        header.set_title_widget(Adw.WindowTitle(title=ssid, subtitle=security))
+        cancel_btn = Gtk.Button(label="Cancel")
+        cancel_btn.connect("clicked", lambda b: self.close())
+        header.pack_start(cancel_btn)
+        self.connect_btn = Gtk.Button(label="Connect")
+        self.connect_btn.add_css_class("suggested-action")
+        self.connect_btn.connect("clicked", self._on_connect_clicked)
+        header.pack_end(self.connect_btn)
+        toolbar_view.add_top_bar(header)
+
+        page = Adw.PreferencesPage()
+        self.group = Adw.PreferencesGroup()
+        page.add(self.group)
+
+        self.password_row = Adw.PasswordEntryRow(title="Password")
+        self.password_row.connect("apply", lambda r: self.connect_btn.emit("clicked"))
+        self.password_row.connect("notify::text", self._on_password_changed)
+        self.group.add(self.password_row)
+
+        toolbar_view.set_content(page)
+
+    def _on_password_changed(self, row, param):
+        pwd = row.get_text()
+        if not pwd:
+            self.group.set_description("")
+        elif len(pwd) < 8:
+            self.group.set_description("<span color='#e5484d'>⚠ Weak (min 8 chars)</span>")
+        elif len(pwd) < 12:
+            self.group.set_description("<span color='#f5b846'>⚡ Medium</span>")
+        else:
+            self.group.set_description("<span color='#46a758'>✓ Strong</span>")
+
+    def _on_connect_clicked(self, button):
+        password = self.password_row.get_text()
+        if not password:
+            self.parent_window.show_error("Password required for secured networks")
+            return
+        self.close()
+        self.parent_window.connect_to_network(self.ssid, password, signal=self.signal)
+
+
+class LogViewerDialog(Adw.Dialog):
+    def __init__(self, parent_window):
+        super().__init__(title="Connection History")
+        self.set_content_width(700)
+        self.set_content_height(400)
+
+        toolbar_view = Adw.ToolbarView()
+        self.set_child(toolbar_view)
+
+        header = Adw.HeaderBar()
+        header.set_title_widget(Adw.WindowTitle(title="Connection History"))
+        clear_btn = Gtk.Button(label="Clear History")
+        clear_btn.add_css_class("destructive-action")
+        clear_btn.connect("clicked", self._on_clear_clicked)
+        header.pack_start(clear_btn)
+        toolbar_view.add_top_bar(header)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+
+        self.text_view = Gtk.TextView()
+        self.text_view.set_editable(False)
+        self.text_view.set_monospace(True)
+        self.text_view.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.text_view.set_margin_start(12)
+        self.text_view.set_margin_end(12)
+        self.text_view.set_margin_top(12)
+        self.text_view.set_margin_bottom(12)
+
+        scroll.set_child(self.text_view)
+        toolbar_view.set_content(scroll)
+
+        self.load_history()
+
+    def load_history(self):
+        buffer = self.text_view.get_buffer()
+        if HISTORY_FILE.exists():
+            with open(HISTORY_FILE, "r") as f:
+                content = f.read()
+                buffer.set_text(content if content else "No connection history yet.")
+        else:
+            buffer.set_text("No connection history yet.")
+        end_iter = buffer.get_end_iter()
+        self.text_view.scroll_to_iter(end_iter, 0.0, False, 0.0, 0.0)
+
+    def _on_clear_clicked(self, button):
+        if HISTORY_FILE.exists():
+            HISTORY_FILE.unlink()
+        self.text_view.get_buffer().set_text("History cleared.")
+
+
+def list_vpn_connections():
+    try:
+        res = subprocess.run(["nmcli", "-t", "-f", "NAME,TYPE,STATE", "connection", "show"],
+                             capture_output=True, text=True, timeout=6)
+        vpn_list = []
+        for line in res.stdout.splitlines():
+            if not line.strip():
+                continue
+            parts = line.split(":")
+            if len(parts) < 3:
+                continue
+            name, ctype, state = parts[0], parts[1], parts[2]
+            if ctype in ("vpn", "wireguard"):
+                vpn_list.append((name, state))
+        return vpn_list
+    except Exception as e:
+        log_debug(f"list_vpn_connections error: {e}")
+        return []
+
+
+def toggle_vpn_connection(name, callback=None):
+    def _worker():
+        try:
+            res = subprocess.run(["nmcli", "-t", "-f", "NAME", "connection", "show", "--active"],
+                                 capture_output=True, text=True, timeout=6)
+            active_names = [l.strip() for l in res.stdout.splitlines() if l.strip()]
+            cmd = ["nmcli", "connection", "down" if name in active_names else "up", name]
+            log_debug(f"Running VPN toggle: {' '.join(cmd)}")
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            out = r.stdout.strip() or r.stderr.strip()
+            if callback:
+                GLib.idle_add(callback, r.returncode == 0, out)
+        except Exception as e:
+            log_debug(f"toggle_vpn_connection error: {e}")
+            if callback:
+                GLib.idle_add(callback, False, str(e))
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+class NetworkItem(GObject.Object):
+    """Jeden riadok v zozname sietí (nahrádza starý Gtk.ListStore riadok)."""
+    __gtype_name__ = "NetworkItem"
+
+    def __init__(self, display_ssid, signal_text, security, signal_value, ssid, net_type, is_saved):
+        super().__init__()
+        self.display_ssid = display_ssid
+        self.signal_text = signal_text
+        self.security = security
+        self.signal_value = signal_value
+        self.ssid = ssid
+        self.net_type = net_type
+        self.is_saved = is_saved
+
+
+class WifiWindow(Adw.ApplicationWindow):
+    def __init__(self, app, no_scan=False):
+        super().__init__(application=app, title="connex")
+        self.set_default_size(600, 300)
+
+        toolbar_view = Adw.ToolbarView()
+        self.set_content(toolbar_view)
+
+        header = Adw.HeaderBar()
+        toolbar_view.add_top_bar(header)
+
+        # Zisti aktuálne pripojenie hneď na začiatku
+        self.current_ssid = None
+        self.get_current_connection()
+
+        self.header_status_box = Gtk.Box(spacing=6)
+        if self.current_ssid:
+            self.header_status_icon = Gtk.Image.new_from_icon_name(
+                "network-wireless-signal-excellent-symbolic"
+            )
+            self.header_status_label = Gtk.Label()
+            self.header_status_label.set_markup(f"<b>{self.current_ssid}</b>")
+        else:
+            self.header_status_icon = Gtk.Image.new_from_icon_name(
+                "network-wireless-offline-symbolic"
+            )
+            self.header_status_label = Gtk.Label(label="Disconnected")
+        self.header_status_box.append(self.header_status_icon)
+        self.header_status_box.append(self.header_status_label)
+        header.set_title_widget(self.header_status_box)
+
+        self.scan_button = Gtk.Button(icon_name="view-refresh-symbolic")
+        self.scan_button.set_tooltip_text("Refresh Networks")
+        self.scan_button.connect("clicked", self.on_scan_clicked)
+        header.pack_start(self.scan_button)
+
+        # Hamburger menu — plain Gtk.Popover rebuilt right before it's shown
+        # (GTK4 has no Gtk.Menu anymore, and this lets the VPN section stay
+        # dynamic, same as the old Gtk.Menu "show" signal did).
+        self.menu_button = Gtk.MenuButton(icon_name="open-menu-symbolic")
+        self.menu_popover = Gtk.Popover()
+        self.menu_popover.connect("show", self._build_main_menu)
+        self.menu_button.set_popover(self.menu_popover)
+        header.pack_end(self.menu_button)
+
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        toolbar_view.set_content(main_box)
+
+        # Gio.ListStore of NetworkItem, zoradený cez Gtk.SortListModel
+        # (nahrádza staré Gtk.ListStore + Gtk.TreeModelFilter).
+        self.store = Gio.ListStore(item_type=NetworkItem)
+
+        view = Gtk.ColumnView()
+        view.set_show_row_separators(False)
+        view.set_single_click_activate(False)
+
+        icon_column = Gtk.ColumnViewColumn(
+            title="", factory=self._make_factory(Gtk.Image, self._bind_signal_icon))
+        icon_column.set_fixed_width(40)
+        view.append_column(icon_column)
+
+        name_factory = self._make_factory(lambda: Gtk.Label(xalign=0), self._bind_name_label)
+        ssid_column = Gtk.ColumnViewColumn(title="Network Name", factory=name_factory)
+        ssid_column.set_expand(True)
+        ssid_column.set_sorter(Gtk.CustomSorter.new(self._sort_by_name))
+        view.append_column(ssid_column)
+
+        signal_column = Gtk.ColumnViewColumn(
+            title="Signal", factory=self._make_factory(lambda: Gtk.Label(xalign=0), self._bind_signal_label))
+        signal_column.set_fixed_width(80)
+        signal_column.set_sorter(Gtk.CustomSorter.new(self._sort_by_signal))
+        view.append_column(signal_column)
+
+        sec_column = Gtk.ColumnViewColumn(
+            title="Security", factory=self._make_factory(lambda: Gtk.Label(xalign=0), self._bind_security_label))
+        sec_column.set_fixed_width(120)
+        view.append_column(sec_column)
+
+        type_column = Gtk.ColumnViewColumn(
+            title="Type", factory=self._make_factory(lambda: Gtk.Label(xalign=0), self._bind_type_label))
+        type_column.set_fixed_width(80)
+        view.append_column(type_column)
+
+        # Saved indicator column
+        saved_column = Gtk.ColumnViewColumn(
+            title="", factory=self._make_factory(Gtk.Image, self._bind_saved_icon))
+        saved_column.set_fixed_width(30)
+        view.append_column(saved_column)
+
+        self.sort_model = Gtk.SortListModel(model=self.store, sorter=view.get_sorter())
+        self.selection = Gtk.SingleSelection(model=self.sort_model)
+        view.set_model(self.selection)
+        view.sort_by_column(signal_column, Gtk.SortType.DESCENDING)
+
+        view.connect("activate", self._on_view_activate)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_margin_start(12)
+        scroll.set_margin_end(12)
+        scroll.set_margin_bottom(12)
+        scroll.set_child(view)
+        main_box.append(scroll)
+
+        self.view = view
+        self.selected_ssid = None
+        self.selected_security = None
+        self.current_connection = None
+        self.current_ssid = None
+        self.saved_networks = set()
+
+        self.no_scan = no_scan
+        if not self.no_scan:
+            self.auto_refresh = True
+            GLib.timeout_add_seconds(10, self.auto_scan)
+        else:
+            self.auto_refresh = False
+
+        GLib.timeout_add_seconds(5, self.update_header_status)
+        Notify.init("connex")
+
+        self.connect("close-request", self._on_close_request)
+
+        if not no_scan:
+            GLib.idle_add(self.scan_networks)
+
+    def _on_close_request(self, *args):
+        self.auto_refresh = False
+        return False
+
+    # --- Gtk.ColumnView factories (nahrádzajú staré cell-data-funcs) ---
+    def _make_factory(self, widget_ctor, bind_func):
+        """Vyrobí Gtk.SignalListItemFactory: 'setup' vytvorí widget (Label/Image)
+        a pripojí naň pravé tlačidlo (kontextové menu pre daný riadok),
+        'bind' zapamätá aktuálnu položku na widgete a naplní jej obsah."""
+        factory = Gtk.SignalListItemFactory()
+
+        def on_setup(f, list_item):
+            widget = widget_ctor()
+            list_item.set_child(widget)
+            gesture = Gtk.GestureClick.new()
+            gesture.set_button(3)
+            gesture.connect("pressed", self._on_cell_right_click)
+            widget.add_controller(gesture)
+
+        def on_bind(f, list_item):
+            widget = list_item.get_child()
+            item = list_item.get_item()
+            widget._row_item = item
+            bind_func(widget, item)
+
+        factory.connect("setup", on_setup)
+        factory.connect("bind", on_bind)
+        return factory
+
+    def _bind_name_label(self, label, item):
+        label.set_text(item.display_ssid)
+        label.set_ellipsize(Pango.EllipsizeMode.END)
+
+    def _bind_signal_label(self, label, item):
+        label.set_text(item.signal_text)
+
+    def _bind_security_label(self, label, item):
+        label.set_text(item.security)
+
+    def _bind_type_label(self, label, item):
+        label.set_text(item.net_type)
+
+    def _bind_signal_icon(self, image, item):
+        if item.net_type == "WiFi":
+            if item.signal_value >= 75:
+                icon = "network-wireless-signal-excellent-symbolic"
+            elif item.signal_value >= 50:
+                icon = "network-wireless-signal-good-symbolic"
+            elif item.signal_value >= 25:
+                icon = "network-wireless-signal-ok-symbolic"
+            else:
+                icon = "network-wireless-signal-weak-symbolic"
+        else:
+            icon = "network-wireless-symbolic"
+        image.set_from_icon_name(icon)
+
+    def _bind_saved_icon(self, image, item):
+        image.set_from_icon_name("emblem-ok-symbolic" if item.is_saved else None)
+
+    def _sort_by_name(self, item_a, item_b, data=None):
+        a, b = item_a.display_ssid.lower(), item_b.display_ssid.lower()
+        return -1 if a < b else (1 if a > b else 0)
+
+    def _sort_by_signal(self, item_a, item_b, data=None):
+        a, b = item_a.signal_value, item_b.signal_value
+        return -1 if a < b else (1 if a > b else 0)
+
+    def _position_of(self, item):
+        n = self.sort_model.get_n_items()
+        for i in range(n):
+            if self.sort_model.get_item(i) == item:
+                return i
+        return None
+
+    def _on_view_activate(self, view, position):
+        item = self.sort_model.get_item(position)
+        if item is not None:
+            self.handle_row_activated(item)
+
+    def _on_cell_right_click(self, gesture, n_press, x, y):
+        widget = gesture.get_widget()
+        item = getattr(widget, "_row_item", None)
+        if item is not None:
+            self.show_context_menu(item, widget, x, y)
+
+    def _build_main_menu(self, popover):
+        """Znova postaví obsah hamburger menu tesne pred zobrazením -
+        vďaka tomu je sekcia VPN vždy aktuálna, rovnako ako predtým
+        cez signál 'show' na Gtk.Menu."""
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        box.set_margin_top(6)
+        box.set_margin_bottom(6)
+        box.set_margin_start(6)
+        box.set_margin_end(6)
+
+        def add_item(label, callback, sensitive=True):
+            btn = Gtk.Button(label=label)
+            btn.set_has_frame(False)
+            btn.set_sensitive(sensitive)
+            if sensitive:
+                btn.connect("clicked", lambda b: (self.menu_popover.popdown(), callback()))
+            box.append(btn)
+            return btn
+
+        add_item("Connection Info", self.show_connection_info)
+        add_item("View History", self.show_history)
+        box.append(Gtk.Separator())
+        add_item("Connect to Hidden Network", self.connect_hidden_network)
+        box.append(Gtk.Separator())
+        add_item("Spravovať pripojenia…", lambda: subprocess.Popen(["nm-connection-editor"]))
+
+        vpns = list_vpn_connections()
+        box.append(Gtk.Separator())
+        vpn_label = Gtk.Label(label="VPN")
+        vpn_label.set_xalign(0)
+        vpn_label.add_css_class("dim-label")
+        vpn_label.add_css_class("caption")
+        vpn_label.set_margin_start(6)
+        vpn_label.set_margin_top(4)
+        box.append(vpn_label)
+        if not vpns:
+            add_item("(no VPN profiles)", None, sensitive=False)
+        else:
+            for name, state in vpns:
+                label = f"{name} ({state})" if state else f"{name} (inactive)"
+                add_item(label, lambda n=name: self.on_vpn_item_activated(n))
+
+        box.append(Gtk.Separator())
+        add_item("About", self.show_about)
+
+        popover.set_child(box)
+
+    def on_vpn_item_activated(self, name):
+        def callback(success, out):
+            msg = out or ("Success" if success else "Failed")
+            try:
+                n = Notify.Notification.new("connex", f"{name}: {msg}", None)
+                n.show()
+            except:
+                pass
+            GLib.timeout_add(800, lambda: None)
+        toggle_vpn_connection(name, callback=callback)
+
+    def update_header_status(self):
+        code, out, err = self.run_cmd("nmcli -t -f GENERAL.STATE device show")
+        connected = False
+        for line in out.splitlines():
+            if "connected" in line.lower():
+                connected = True
+                break
+
+        if connected and self.current_ssid:
+            self.header_status_icon.set_from_icon_name(
+                "network-wireless-signal-excellent-symbolic"
+            )
+            self.header_status_label.set_markup(f"<b>{self.current_ssid}</b>")
+            if self.check_internet():
+                self.header_status_label.set_markup(
+                    f"<b>{self.current_ssid}</b> <span color='#46a758'>✓</span>"
+                )
+        else:
+            self.header_status_icon.set_from_icon_name(
+                "network-wireless-offline-symbolic"
+            )
+            self.header_status_label.set_text("Disconnected")
+        return self.auto_refresh
+
+    def check_internet(self):
+        try:
+            result = subprocess.run(
+                ["ping", "-c", "1", "-W", "2", "1.1.1.1"],
+                capture_output=True, timeout=3
+            )
+            return result.returncode == 0
+        except:
+            return False
+
+    def auto_scan(self):
+        if self.auto_refresh and self.get_visible():
+            self.scan_networks(silent=True)
+        return self.auto_refresh
+
+    def run_cmd(self, cmd):
+        try:
+            log_debug(f"Running: {cmd}")
+            res = subprocess.run(shlex.split(cmd), capture_output=True, text=True, timeout=8)
+            log_debug(f"Result: {res.returncode}, stdout: {res.stdout[:100]}")
+            return res.returncode, res.stdout.strip(), res.stderr.strip()
+        except subprocess.TimeoutExpired:
+            log_debug("Command timed out")
+            return 1, "", "Command timed out"
+        except Exception as e:
+            log_debug(f"Command error: {e}")
+            return 1, "", str(e)
+
+    def get_current_connection(self):
+        code, out, err = self.run_cmd("nmcli -t -f NAME,TYPE,DEVICE connection show --active")
+        for line in out.splitlines():
+            parts = line.split(':')
+            if len(parts) >= 2 and parts[1] == "802-11-wireless":
+                self.current_ssid = parts[0]
+                return parts[0]
+        self.current_ssid = None
+        return None
+
+    def scan_networks(self, silent=False):
+        if not silent:
+            log_debug("Scanning networks...")
+            self.scan_button.set_sensitive(False)
+
+        def scan_thread():
+            subprocess.run(["nmcli", "device", "wifi", "rescan"], capture_output=True, timeout=5)
+            code, out, err = self.run_cmd("nmcli -t -f SSID,SIGNAL,SECURITY device wifi list")
+            saved = get_saved_connections()
+            GLib.idle_add(self.update_network_list, code, out, err, silent, saved)
+
+        threading.Thread(target=scan_thread, daemon=True).start()
+
+    def update_network_list(self, code, out, err, silent, saved_networks):
+        if not self.get_visible():
+            return False
+
+        self.scan_button.set_sensitive(True)
+        self.saved_networks = saved_networks
+
+        if code != 0:
+            if not silent:
+                log_debug(f"Scan failed: {err or 'nmcli error'}")
+            return False
+
+        self.current_connection = self.get_current_connection()
+        self.store.remove_all()
+
+        seen_ssids = set()
+        for line in out.splitlines():
+            if not line.strip():
+                continue
+            parts = line.split(':')
+            ssid = parts[0] if parts[0] else "<Hidden Network>"
+            if ssid in seen_ssids:
+                continue
+            seen_ssids.add(ssid)
+
+            signal = parts[1] if len(parts) > 1 else "0"
+            sec = parts[2] if len(parts) > 2 else "Open"
+
+            if not sec or sec == "--":
+                sec_display = "Open"
+            elif "WPA3" in sec:
+                sec_display = "WPA3"
+            elif "WPA2" in sec:
+                sec_display = "WPA2"
+            elif "WPA" in sec:
+                sec_display = "WPA"
+            else:
+                sec_display = sec
+
+            display_ssid = f"● {ssid}" if ssid == self.current_connection else ssid
+            is_saved = ssid in self.saved_networks
+            signal_value = int(signal) if signal.isdigit() else 0
+
+            self.store.append(NetworkItem(
+                display_ssid, f"{signal}%", sec_display, signal_value, ssid, "WiFi", is_saved))
+
+        # Zoradenie podľa signálu (zostupne) rieši Gtk.SortListModel cez
+        # sorter nastavený na stĺpci - netreba ho tu znova vyvolávať.
+
+        count = self.store.get_n_items()
+        if not silent:
+            log_debug(f"Found {count} network{'s' if count != 1 else ''}")
+        return False
+
+    def on_scan_clicked(self, *_):
+        self.scan_networks()
+
+    def connect_hidden_network(self, *_):
+        dialog = HiddenNetworkDialog(self)
+        dialog.present(self)
+
+    def handle_row_activated(self, item):
+        ssid = item.ssid
+        security = item.security
+        signal = item.signal_value
+        is_saved = item.is_saved
+
+        if ssid == "<Hidden Network>":
+            self.connect_hidden_network()
+            return
+
+        if ssid == self.current_connection:
+            self.show_question(
+                f"Already connected to {ssid}",
+                "Do you want to disconnect?",
+                lambda: self.disconnect_network(ssid)
+            )
+            return
+
+        self.selected_ssid = ssid
+        self.selected_security = security
+
+        # Ak je uložený profil, použi ho (heslo je už uložené)
+        if is_saved:
+            self.connect_with_saved_profile(ssid, signal)
+        elif security == "Open":
+            self.connect_to_network(ssid, "", signal=signal)
+        else:
+            dialog = PasswordDialog(self, ssid, security, signal)
+            dialog.present(self)
+
+    def connect_with_saved_profile(self, ssid, signal="0"):
+        """Pripojí sa pomocou uloženého profilu"""
+        log_debug(f"Connecting to {ssid}...")
+
+        def connect_thread():
+            try:
+                result = subprocess.run(
+                    ["nmcli", "connection", "up", ssid],
+                    capture_output=True, text=True, timeout=20
+                )
+                GLib.idle_add(self.on_connect_done, result.returncode,
+                            result.stdout, result.stderr, ssid, signal)
+            except subprocess.TimeoutExpired:
+                GLib.idle_add(self.on_connect_done, 1, "", "Connection timed out", ssid, signal)
+
+        threading.Thread(target=connect_thread, daemon=True).start()
+
+    def connect_to_network(self, ssid, password, hidden=False, signal="0"):
+        """Pripojí sa k novej sieti (vytvorí nový profil)"""
+        log_debug(f"Connecting to {ssid}...")
+
+        def connect_thread():
+            args = ["nmcli", "device", "wifi", "connect", ssid]
+            if password:
+                args += ["password", password]
+            if hidden:
+                args += ["hidden", "yes"]
+
+            try:
+                result = subprocess.run(args, capture_output=True, text=True, timeout=20)
+                GLib.idle_add(self.on_connect_done, result.returncode,
+                            result.stdout, result.stderr, ssid, signal)
+            except subprocess.TimeoutExpired:
+                GLib.idle_add(self.on_connect_done, 1, "", "Connection timed out", ssid, signal)
+
+        threading.Thread(target=connect_thread, daemon=True).start()
+
+    def on_connect_done(self, code, out, err, ssid, signal):
+        if code == 0:
+            log_debug(f"✓ Connected to {ssid}")
+            notification = Notify.Notification.new("Connected", f"Successfully connected to {ssid}", "network-wireless")
+            notification.show()
+            log_connection(ssid, signal, True)
+            GLib.timeout_add(1000, lambda: self.scan_networks(silent=True))
+            GLib.timeout_add(1000, self.update_header_status)
+        else:
+            error_msg = err or out
+            if "Secrets were required" in error_msg:
+                error_msg = "Incorrect password"
+            elif "No network with SSID" in error_msg:
+                error_msg = "Network not found"
+
+            log_debug(f"✗ Failed: {error_msg}")
+            notification = Notify.Notification.new("Connection Failed", f"Could not connect to {ssid}: {error_msg}", "network-wireless-offline")
+            notification.show()
+            log_connection(ssid, signal, False, error_msg)
+        return False
+
+    def disconnect_network(self, ssid):
+        code, out, err = self.run_cmd(f"nmcli connection down '{ssid}'")
+        if code == 0:
+            log_debug(f"Disconnected from {ssid}")
+            notification = Notify.Notification.new("Disconnected", f"Disconnected from {ssid}", "network-wireless-offline")
+            notification.show()
+            GLib.timeout_add(1000, lambda: self.scan_networks(silent=True))
+            GLib.timeout_add(500, self.update_header_status)
+        else:
+            self.show_error(f"Failed to disconnect: {err}")
+
+    def show_context_menu(self, item, widget, x, y):
+        ssid = item.ssid
+        is_saved = item.is_saved
+
+        if ssid == "<Hidden Network>":
+            return
+
+        pos = self._position_of(item)
+        if pos is not None:
+            self.selection.set_selected(pos)
+
+        popover = Gtk.Popover()
+        popover.set_parent(widget)
+        popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
+        popover.connect("closed", lambda p: p.unparent())
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        box.set_margin_top(6)
+        box.set_margin_bottom(6)
+        box.set_margin_start(6)
+        box.set_margin_end(6)
+
+        def add_item(label, callback):
+            btn = Gtk.Button(label=label)
+            btn.set_has_frame(False)
+            btn.connect("clicked", lambda b: (popover.popdown(), callback()))
+            box.append(btn)
+
+        add_item("Connect", lambda: self.handle_row_activated(item))
+
+        if ssid == self.current_connection:
+            add_item("Disconnect", lambda: self.disconnect_network(ssid))
+
+        if is_saved:
+            box.append(Gtk.Separator())
+            add_item("Forget Network", lambda: self.forget_network(ssid))
+
+        popover.set_child(box)
+        popover.popup()
+
+    def forget_network(self, ssid):
+        def _do_forget():
+            code, out, err = self.run_cmd(f"nmcli connection delete '{ssid}'")
+            if code == 0:
+                log_debug(f"Forgot network {ssid}")
+                GLib.timeout_add(500, lambda: self.scan_networks(silent=True))
+            else:
+                log_debug(f"Failed to forget: {err}")
+
+        self.show_question(
+            f"Forget network '{ssid}'?",
+            "This will remove the saved password and settings.",
+            _do_forget
+        )
+
+    def show_connection_info(self, *_):
+        code, out, err = self.run_cmd("nmcli -t -f GENERAL,IP4 device show")
+        if code == 0 and out:
+            info_lines = []
+            for line in out.splitlines()[:20]:
+                if any(x in line for x in ["IP4.ADDRESS", "IP4.GATEWAY", "IP4.DNS", "GENERAL.CONNECTION", "GENERAL.STATE"]):
+                    key, val = line.split(":", 1)
+                    key = key.replace("GENERAL.", "").replace("IP4.", "")
+                    info_lines.append(f"{key}: {val}")
+            body = "\n".join(info_lines) if info_lines else "No active connection"
+            dialog = Adw.AlertDialog(heading="Network Information", body=body)
+            dialog.add_response("ok", "OK")
+            dialog.set_default_response("ok")
+            dialog.set_close_response("ok")
+            dialog.present(self)
+        else:
+            self.show_error("Could not retrieve connection info")
+
+    def show_history(self, *_):
+        dialog = LogViewerDialog(self)
+        dialog.present(self)
+
+    def show_about(self, *_):
+        dialog = Adw.AboutDialog(
+            application_name="connex",
+            version="1.1",
+            comments="Modern Wi-Fi Manager",
+            website="https://github.com/Lluciocc/connex",
+            license_type=Gtk.License.MIT_X11,
+            developer_name="Lluciocc",
+            developers=["Lluciocc"],
+        )
+        dialog.present(self)
+
+    def show_error(self, message):
+        dialog = Adw.AlertDialog(heading="Error", body=message)
+        dialog.add_response("ok", "OK")
+        dialog.set_default_response("ok")
+        dialog.set_close_response("ok")
+        dialog.present(self)
+
+    def show_question(self, primary, secondary, on_yes):
+        dialog = Adw.AlertDialog(heading=primary, body=secondary)
+        dialog.add_response("no", "No")
+        dialog.add_response("yes", "Yes")
+        dialog.set_response_appearance("yes", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("yes")
+        dialog.set_close_response("no")
+
+        def _on_response(d, response):
+            if response == "yes":
+                on_yes()
+        dialog.connect("response", _on_response)
+        dialog.present(self)
+
+
+def run_cmd_sync(cmd):
+    try:
+        res = subprocess.run(shlex.split(cmd), capture_output=True, text=True, timeout=10)
+        return res.returncode, res.stdout.strip(), res.stderr.strip()
+    except Exception as e:
+        return 1, "", str(e)
+
+
+def cli_mode(args):
+    if args.cli_action == "list":
+        code, out, err = run_cmd_sync("nmcli -t -f SSID,SIGNAL,SECURITY device wifi list")
+        if code == 0:
+            print("SSID\t\tSignal\tSecurity")
+            print("-" * 50)
+            for line in out.splitlines():
+                if line.strip():
+                    parts = line.split(':')
+                    ssid = parts[0] if parts[0] else "<Hidden>"
+                    signal = parts[1] if len(parts) > 1 else "?"
+                    sec = parts[2] if len(parts) > 2 else "Open"
+                    print(f"{ssid}\t{signal}%\t{sec}")
+        return 0
+    elif args.cli_action == "connect":
+        if not args.ssid:
+            print("Error: SSID required")
+            return 1
+        saved = get_saved_connections()
+        if args.ssid in saved:
+            result = subprocess.run(["nmcli", "connection", "up", args.ssid],
+                                   capture_output=True, text=True, timeout=20)
+        else:
+            cmd_args = ["nmcli", "device", "wifi", "connect", args.ssid]
+            if args.password:
+                cmd_args += ["password", args.password]
+            result = subprocess.run(cmd_args, capture_output=True, text=True, timeout=20)
+        if result.returncode == 0:
+            print(f"✓ Connected to {args.ssid}")
+            return 0
+        else:
+            print(f"✗ Failed: {result.stderr}")
+            return 1
+    elif args.cli_action == "disconnect":
+        if not args.ssid:
+            print("Error: SSID required")
+            return 1
+        code, out, err = run_cmd_sync(f"nmcli connection down '{args.ssid}'")
+        if code == 0:
+            print(f"✓ Disconnected from {args.ssid}")
+            return 0
+        else:
+            print(f"✗ Failed: {err}")
+            return 1
+    elif args.cli_action == "status":
+        code, out, err = run_cmd_sync("nmcli -t -f GENERAL,IP4 device show")
+        if code == 0:
+            print("Network Status:\n" + "-" * 50)
+            for line in out.splitlines()[:15]:
+                if any(x in line for x in ["CONNECTION", "STATE", "IP4.ADDRESS", "IP4.GATEWAY"]):
+                    print(line.replace(":", ": "))
+        return 0
+    return 0
+
+
+class ConnexApp(Adw.Application):
+    def __init__(self, no_scan=False):
+        super().__init__(application_id="io.github.lluciocc.Connex")
+        self.no_scan = no_scan
+
+    def do_activate(self):
+        Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+        win = self.props.active_window
+        if not win:
+            win = WifiWindow(self, no_scan=self.no_scan)
+        win.present()
+
+
+def main():
+    global DEBUG_MODE
+    parser = argparse.ArgumentParser(description="connex - Modern Wi-Fi Manager")
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    parser.add_argument("--tray", action="store_true", help="Start in system tray (ignored)")
+    parser.add_argument("--cli", dest="cli_action", choices=["list", "connect", "disconnect", "status"], help="CLI mode")
+    parser.add_argument("--ssid", help="SSID for CLI connect/disconnect")
+    parser.add_argument("--password", help="Password for CLI connect")
+    parser.add_argument("--no-scan", action="store_true", help="Disable auto scanning")
+    args = parser.parse_args()
+
+    DEBUG_MODE = args.debug
+    ensure_config_dir()
+
+    if args.cli_action:
+        return cli_mode(args)
+
+    if args.tray:
+        print("Warning: --tray mode not supported; launching window instead.", file=sys.stderr)
+
+    app = ConnexApp(no_scan=args.no_scan)
+    return app.run(None)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

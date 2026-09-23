@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nová karta</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="bible-app.css">
+</head>
+<body>
+    <button class="settings-btn" id="settingsBtn" title="Nastavenia vzhľadu a úprava poradia">⚙️</button>
+
+    <div id="b"></div>
+
+    <div class="container">
+        <div class="header">
+            <h1 id="dateTime"></h1>
+        </div>
+
+    	<div class="bible-verse" id="bibleVerse">
+            <div class="verse-text" id="verseText">"Buďte pevní, neochvejní, vždy plní horlivosti pre Pánovo dielo."</div>
+            <div class="verse-reference" id="verseReference">1 Korinťanom 15,58</div>
+        </div>
+
+        <div id="grid" class="grid"></div>
+
+        <div id="emptyState" class="empty-state" style="display: none;">
+            <h2>Zatiaľ nemáte žiadne vlastné záložky</h2>
+            <p>Kliknite na dátum a čas (ak je zobrazený) alebo použite tlačidlo 'Pridať dlaždicu' v nastaveniach.</p>
+            <p>(Upraviť/Odstrániť môžete kliknutím pravým tlačidlom myši na kartu)</p>
+        </div>
+    </div>
+
+    <div id="modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="modalTitle">Pridať záložku</h2>
+                <button class="close-btn" id="closeBtn">&times;</button>
+            </div>
+
+            <form id="bookmarkForm">
+                <div class="form-group">
+                    <label class="form-label" for="name">Názov</label>
+                    <input type="text" id="name" class="form-input" placeholder="Napr. Google" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="url">URL</label>
+                    <input type="url" id="url" class="form-input" placeholder="https://example.com" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="image">Obrázok</label>
+                    <input type="file" id="image" class="form-input" accept="image/*">
+                    <div class="image-preview" id="imagePreview">
+                        <span class="image-preview-text">Kliknite na "Vyberte súbor" pre nahratie obrázka</span>
+                    </div>
+                </div>
+
+                <div class="form-buttons">
+                    <button type="button" class="btn btn-secondary" id="cancelBtn">Zrušiť</button>
+                    <button type="submit" class="btn btn-primary">Uložiť</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="settingsModal" class="modal">
+        <div class="modal-content settings-modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Nastavenie</h2>
+                <button class="close-btn" id="closeSettingsBtn">&times;</button>
+            </div>
+            
+            <div class="settings-buttons-top">
+                <button class="btn btn-compact btn-secondary" id="toggleEditModeBtn">Presun dlaždíc</button>
+                <button class="btn btn-compact btn-secondary" id="resetSettings">Pôvodné nastavenie</button>
+                <button class="btn btn-compact btn-secondary" id="exportDataBtn" style="flex: 1;">Export nastavenia</button>
+                <button class="btn btn-compact btn-primary" id="triggerImportBtn" style="flex: 1;">Import nastavenia</button>
+                <input type="file" id="importFile" accept=".json" style="display: none;">
+            </div>
+            
+            <div class="settings-sections">
+                <div class="settings-section">
+                    <div class="settings-row-layout">
+                        <div class="setting-item-compact">
+                            <label class="setting-label" for="gridWidth">Šírka mriežky (%)</label>
+                            <input type="number" id="gridWidth" class="setting-input-tiny" min="50" max="100" value="100">
+                        </div>
+                        <div class="setting-item-compact">
+                            <label class="setting-label" for="gapHorizontal">Horizontálny rozostup (px)</label>
+                            <input type="number" id="gapHorizontal" class="setting-input-tiny" min="0" max="100" value="20">
+                        </div>
+                        <div class="setting-item-compact">
+                            <label class="setting-label" for="cardBorderRadius">Zaoblenie dlaždíc (px)</label>
+                            <input type="number" id="cardBorderRadius" class="setting-input-tiny" min="0" max="50" value="12">
+                        </div>
+                        <div class="setting-item-compact">
+                            <label class="setting-label" for="gridColumns">Počet stĺpcov</label>
+                            <input type="number" id="gridColumns" class="setting-input-tiny" min="1" max="12" value="6">
+                        </div>
+                        <div class="setting-item-compact">
+                            <label class="setting-label" for="gapVertical">Vertikálny rozostup (px)</label>
+                            <input type="number" id="gapVertical" class="setting-input-tiny" min="0" max="100" value="20">
+                        </div>
+                        <div class="setting-item-compact">
+                            <label for="cardShape" class="setting-label">Tvar dlaždice</label>
+                            <select id="cardShape" class="setting-input-tiny">
+                                <option value="square">Štvorec (1:1)</option>
+                                <option value="vivaldi">Obdĺžnik (7:5)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <div class="settings-row-toggles">
+                        <div class="setting-item-toggle">
+                            <label class="setting-label" for="showBookmarkBar">Panel záložiek</label>
+                            <input type="checkbox" id="showBookmarkBar" class="setting-toggle">
+                        </div>
+                        <div class="setting-item-toggle">
+                            <label class="setting-label" for="showDateTime">Dátum a čas</label>
+                            <input type="checkbox" id="showDateTime" class="setting-toggle">
+                        </div>
+                        <div class="setting-item-toggle">
+                            <label class="setting-label" for="showVerse">Biblický verš</label>
+                            <input type="checkbox" id="showVerse" class="setting-toggle">
+                        </div>
+                        <button class="btn btn-compact btn-primary" id="addNewTileBtn">Pridať dlaždicu</button>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <div class="settings-row-colors">
+                        <div class="setting-item-text">
+                            <label class="setting-label" for="bookmarkBarColorText">Panel záložiek</label>
+                            <div class="color-input-wrapper-compact">
+                                <button class="color-preview-small" type="button" style="background: var(--bookmark-bar-color, #1c2027);" data-target="bookmarkBarColor"></button>
+                                <input type="color" id="bookmarkBarColor" value="#1c2027">
+                                <input type="text" id="bookmarkBarColorText" class="setting-input-color" value="#1c2027" placeholder="#1c2027" maxlength="7">
+                            </div>
+                            <div class="color-opacity-row">
+                                 <input type="range" id="bookmarkBarOpacity" class="opacity-slider" min="0" max="100" value="100">
+                                 <span class="opacity-value" data-value-for="bookmarkBarOpacity">100%</span>
+                            </div>
+                        </div>
+
+                        <div class="setting-item-text">
+                            <label class="setting-label" for="bgColorText">Stránka novej karty</label>
+                            <div class="color-input-wrapper-compact">
+                                <button class="color-preview-small" type="button" style="background: var(--bg-color, #1c2027);" data-target="bgColor"></button>
+                                <input type="color" id="bgColor" value="#1c2027">
+                                <input type="text" id="bgColorText" class="setting-input-color" value="#1c2027" placeholder="#1c2027" maxlength="7"> 
+                            </div>
+                            <div class="setting-file-row">
+                                <input type="file" id="bgImage" class="setting-input-file" accept="image/*">
+                                <button type="button" id="clearBgImage" class="btn-clear-image" title="Odstrániť obrázok">×</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <div class="settings-row-colors"> 
+                        <div class="setting-item-text">
+                            <label class="setting-label" for="bookmarkTextColorText">Záložky a dlaždice</label>
+                            <div class="color-input-wrapper-compact">
+                                 <button class="color-preview-small" type="button" style="background: var(--bookmark-text-color, #bababa);" data-target="bookmarkTextColor"></button>
+                                 <input type="color" id="bookmarkTextColor" value="#bababa">
+                                 <input type="text" id="bookmarkTextColorText" class="setting-input-color" value="#bababa" placeholder="#bababa" maxlength="7">
+                            </div>
+                            <div class="color-opacity-row">
+                                 <input type="range" id="bookmarkTextOpacity" class="opacity-slider" min="0" max="100" value="100">
+                                 <span class="opacity-value" data-value-for="bookmarkTextOpacity">100%</span>
+                            </div>
+                        </div>
+                    
+                        <div class="setting-item-text">
+                            <label class="setting-label" for="dateTimeColorText">Dátum a čas</label>
+                             <div class="color-input-wrapper-compact">
+                                <button class="color-preview-small" type="button" style="background: var(--date-time-color, #bababa);" data-target="dateTimeColor"></button>
+                                <input type="color" id="dateTimeColor" value="#bababa">
+                                <input type="text" id="dateTimeColorText" class="setting-input-color" value="#bababa" placeholder="#bababa" maxlength="7">
+                            </div>
+                            <div class="color-opacity-row">
+                                <input type="range" id="dateTimeOpacity" class="opacity-slider" min="0" max="100" value="100">
+                                <span class="opacity-value" data-value-for="dateTimeOpacity">100%</span>
+                            </div>
+                        </div>
+                        
+                        <div class="setting-item-text">
+                            <label class="setting-label" for="verseTextColorText">Verš - Text</label>
+                            <div class="color-input-wrapper-compact">
+                                <button class="color-preview-small" type="button" style="background: var(--verse-text-color, #bababa);" data-target="verseTextColor"></button>
+                                <input type="color" id="verseTextColor" value="#bababa">
+                                <input type="text" id="verseTextColorText" class="setting-input-color" value="#bababa" placeholder="#bababa" maxlength="7">
+                            </div>
+                            <div class="color-opacity-row">
+                                <input type="range" id="verseTextOpacity" class="opacity-slider" min="0" max="100" value="100">
+                                <span class="opacity-value" data-value-for="verseTextOpacity">100%</span>
+                            </div>
+                        </div>
+                        
+                        <div class="setting-item-text">
+                            <label class="setting-label" for="referenceColorText">Verš - Odkaz</label>
+                            <div class="color-input-wrapper-compact">
+                                <button class="color-preview-small" type="button" style="background: var(--reference-color, #bababa);" data-target="referenceColor"></button>
+                                <input type="color" id="referenceColor" value="#bababa">
+                                <input type="text" id="referenceColorText" class="setting-input-color" value="#bababa" placeholder="#bababa" maxlength="7">
+                            </div>
+                            <div class="color-opacity-row">
+                                <input type="range" id="referenceOpacity" class="opacity-slider" min="0" max="100" value="100">
+                                <span class="opacity-value" data-value-for="referenceOpacity">100%</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+    
+<div id="bibleModal" class="modal">
+    <div class="bible-modal-content">
+        <div class="bible-header">
+            
+            <div class="bible-history-nav">
+                <button class="bible-nav-btn" id="bibleHistoryBackBtn" title="Späť">◄</button>
+                <button class="bible-nav-btn" id="bibleHistoryFwdBtn" title="Vpred">►</button>
+            </div>
+            
+            <button class="bible-nav-btn" id="bibleBookmarksBtn" title="Záložky">Záložky</button>
+            
+            <select id="bibleBookSelect" class="bible-select">
+                <option value="">Vyberte knihu...</option>
+            </select>
+            
+            <div class="bible-chapter-nav">
+                <button class="bible-nav-btn" id="prevChapterBtn" title="Predchádzajúca kapitola">◀</button>
+                <select id="bibleChapterSelect" class="bible-select">
+                    <option value="">Kapitola...</option>
+                </select>
+                <button class="bible-nav-btn" id="nextChapterBtn" title="Nasledujúca kapitola">▶</button>
+            </div>
+            
+            <div class="bible-search-controls">
+                <input type="text" id="bibleSearchInput" placeholder="Hľadať slovo/frázu..." class="bible-input">
+                
+                <select id="bibleSearchScope" class="bible-select">
+                    <option value="all">Celá Biblia</option>
+                    <option value="ot">Starý zákon</option>
+                    <option value="nt">Nový zákon</option>
+                    <option value="current">Aktuálna kniha</option>
+                </select>
+                
+            </div>
+            
+            <button class="bible-close-btn" id="bibleCloseBtn">&times;</button>
+        </div>
+        
+        <div class="bible-content-wrapper">
+            <div class="bible-main-content" id="bibleMainContent">
+                <div class="bible-loading">Vyberte knihu a kapitolu</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Kontextové menu pre verše -->
+<div id="verseContextMenu" class="verse-context-menu"></div>
+
+<!-- Modálne okno pre správu záložiek -->
+<div id="bookmarksModal">
+    <div class="bookmarks-modal-content">
+        <div class="bookmarks-header">
+            <h2>Záložky</h2>
+            <div class="bookmarks-header-buttons">
+                <button class="bookmarks-action-btn" id="exportBookmarksBtn">Export</button>
+                <button class="bookmarks-action-btn" id="importBookmarksBtn">Import</button>
+                <input type="file" id="importBookmarksFile" accept=".json" style="display: none;">
+                <button class="bookmarks-close-btn" id="closeBookmarksBtn">&times;</button>
+            </div>
+        </div>
+        <div class="bookmarks-content" id="bookmarksContent"></div>
+    </div>
+</div>
+
+<div id="contextMenu" class="context-menu">
+        <div class="context-menu-item" data-action="edit">Upraviť</div>
+        <div class="context-menu-item delete" data-action="delete">Odstrániť</div>
+    </div>
+
+    <script src="Sortable.min.js"></script>
+    <script src="bible-verses.js"></script>
+    <script src="script.js"></script>
+    <script src="bible-app.js"></script>
+</body>
+</html>

@@ -1,0 +1,223 @@
+            /* - Globalne farby - */
+            window, .view, scrolledwindow > viewport {
+                background-color: #1e1e1e;
+                color: #ffffff;
+            }
+
+            /* - Header bar - */
+            headerbar {
+                background-color: #303030;
+                color: #ffffff;
+                border-bottom: 1px solid #171717;
+                min-height: 42px;
+                padding: 2px 6px;
+            }
+            headerbar button, headerbar togglebutton {
+                background-color: #3d3d3d;
+                border: 1px solid #525252;
+                color: #e0e0e0;
+                border-radius: 6px;
+                padding: 3px 7px;
+                min-height: 24px;
+            }
+            headerbar button:hover, headerbar togglebutton:hover {
+                background-color: #484848;
+                color: #ffffff;
+            }
+            headerbar button:active,
+            headerbar togglebutton:checked {
+                background-color: #484848;
+                color: #ffffff;
+                border-color: #606060;
+            }
+            headerbar button:disabled {
+                opacity: 0.35;
+            }
+            headerbar .linked button,
+            headerbar .linked togglebutton {
+                border-radius: 0;
+            }
+            headerbar .linked button:first-child,
+            headerbar .linked togglebutton:first-child {
+                border-radius: 6px 0 0 6px;
+            }
+            headerbar .linked button:last-child,
+            headerbar .linked togglebutton:last-child {
+                border-radius: 0 6px 6px 0;
+            }
+
+            /* - Lavy panel - */
+            .navigation-sidebar {
+                background-color: #262626;
+                color: #e0e0e0;
+            }
+            .navigation-sidebar row {
+                border-radius: 6px;
+                padding: 1px 4px;
+            }
+            .navigation-sidebar row:selected {
+                background-color: #3d3d3d;
+                color: #ffffff;
+            }
+            .navigation-sidebar row:hover:not(:selected) {
+                background-color: #2f2f2f;
+            }
+
+            .left-tab-btn {
+                background-color: #303030;
+                border: 1px solid #525252;
+                color: #aaaaaa;
+                font-size: 0.95em;
+                font-weight: normal;
+                padding: 4px 2px;
+                border-radius: 0;
+            }
+            .left-tab-btn:first-child { border-radius: 6px 0 0 6px; }
+            .left-tab-btn:last-child  { border-radius: 0 6px 6px 0; }
+            .left-tab-btn:hover {
+                background-color: #3d3d3d;
+                color: #ffffff;
+            }
+            .left-tab-btn:checked {
+                background-color: #3d3d3d;
+                color: #ffffff;
+                font-weight: bold;
+            }
+
+            paned > separator {
+                background-color: #171717;
+                min-width: 1px;
+            }
+            separator {
+                background-color: #3a3a3a;
+                min-height: 1px;
+            }
+
+            /* - Obsah - verse - */
+            .verse-number {
+                color: #aaaaaa;
+                font-weight: bold;
+                font-size: 0.80em;
+                min-width: 28px;
+            }
+            .verse-text {
+                font-size: 1.1em;
+                line-height: 1.65;
+                color: #f0f0f0;
+            }
+            .section-title {
+                font-weight: bold;
+                font-style: italic;
+                margin-top: 14px;
+                margin-bottom: 2px;
+                color: #26a269;
+                font-size: 1.2em;
+            }
+
+            .title-2 {
+                color: #d0d0d0;
+            }
+
+            .verse-highlight {
+                background-color: alpha(#ffffff, 0.07);
+                border-radius: 6px;
+            }
+            .verse-highlight-comm {
+                background-color: alpha(#26a269, 0.10);
+                border-radius: 6px;
+            }
+
+            /* - Tlacidla pri versoch - */
+            .comm-btn {
+                padding: 0px;
+                min-width: 18px;
+                min-height: 18px;
+                border-radius: 9px;
+                color: #26a269;
+                opacity: 0.55;
+            }
+            .comm-btn:hover { opacity: 1.0; }
+            .comm-btn-active {
+                color: #2ec27e;
+                opacity: 1.0;
+            }
+            .bookmark-btn {
+                padding: 0px;
+                min-width: 18px;
+                min-height: 18px;
+                border-radius: 9px;
+                opacity: 0.35;
+            }
+            .bookmark-btn:hover { opacity: 1.0; }
+            .bookmark-btn-on {
+                color: #cd9309;
+                opacity: 0.9;
+            }
+            .note-btn {
+                padding: 0px;
+                min-width: 18px;
+                min-height: 18px;
+                border-radius: 9px;
+                opacity: 0.35;
+            }
+            .note-btn:hover { opacity: 1.0; }
+            .note-btn-on {
+                color: #9090d0;
+                opacity: 0.9;
+            }
+
+            /* - Komentarovy panel - */
+            .comm-panel {
+                background-color: #262626;
+                border-top: 1px solid #171717;
+            }
+            .comm-text {
+                font-size: 0.97em;
+                line-height: 1.65;
+                color: #c8c8c8;
+            }
+            .comm-text a {
+                color: #78b8f0;
+                text-decoration: none;
+            }
+            .comm-text a:hover { text-decoration: underline; }
+
+            .bookmarks-list image.bookmark-btn-on { color: #cd9309; }
+            .bookmarks-list image.note-btn-on     { color: #9090d0; }
+
+            /* - Slovnik - */
+            .dict-topic-lbl { font-weight: bold; color: #e0e0e0; }
+            .dict-text {
+                font-size: 1.1em;
+                line-height: 1.6;
+                color: #f0f0f0;
+            }
+            .dict-text a       { color: #78b8f0; text-decoration: none; }
+            .dict-text a:hover { text-decoration: underline; }
+            .dict-placeholder  { color: alpha(#ffffff, 0.35); }
+
+            .note-expand-btn { padding: 0px 2px; min-height: 18px; opacity: 0.75; }
+            .note-expand-btn:hover { opacity: 1.0; }
+
+            .caption { color: alpha(#ffffff, 0.45); }
+
+            /* - Vyhladavanie - */
+            .search-bar, .search-bar > revealer > box {
+                background-color: #303030;
+                border-bottom: 1px solid #171717;
+            }
+            entry {
+                background-color: #3d3d3d;
+                color: #ffffff;
+                border: 1px solid #525252;
+                border-radius: 6px;
+            }
+            entry:focus {
+                border-color: #78b8f0;
+            }
+            dropdown, combobox {
+                background-color: #3d3d3d;
+                color: #ffffff;
+                border: 1px solid #525252;
+                border-radius: 6px;
+            }

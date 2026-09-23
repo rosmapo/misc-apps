@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+import os
+import subprocess
+import threading
+import hashlib
+from pathlib import Path
+from tkinter import Tk, Canvas, Frame, Label
+from PIL import Image, ImageTk
+
+class WallpaperChooser:
+    def __init__(self, wallpaper_dir):
+        self.wallpaper_dir = Path(wallpaper_dir).expanduser()
+        self.wayfire_ini = Path.home() / ".config/wayfire/wayfire.ini"
+        
+        # Nastavenie cache priečinka
+        self.cache_dir = Path.home() / ".cache" / "wallpaper-chooser-thumbs"
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+        self.root = Tk()
+        self.root.title("Výber pozadia")
+        self.root.geometry("900x600")
+        self.root.configure(bg="#242424")
+
+        main_frame = Frame(self.root, bg="#242424")
+        main_frame.pack(fill="both", expand=True)
+
+        self.canvas = Canvas(main_frame, bg="#242424", highlightthickness=0, bd=0)
+        self.scrollable_frame = Frame(self.canvas, bg="#242424")
+        
+        self.scrollable_frame.bind("<Configure>", self.check_scrolling)
+        self.canvas.bind('<Configure>', self.check_scrolling)
+        self.canvas.create_window((10, 10), window=self.scrollable_frame, anchor="nw")
+        self.canvas.pack(fill="both", expand=True, padx=10, pady=10)
+
+        self.canvas.bind_all("<MouseWheel>", self.on_mousewheel)
+        self.canvas.bind_all("<Button-4>", self.on_mousewheel_up)
+        self.canvas.bind_all("<Button-5>", self.on_mousewheel_down)
+        
+        # Premenné pre grid
+        self.row = 0
+        self.col = 0
+
+        self.load_wallpapers()
+
+    def get_cache_path(self, img_path):
+        """Vytvorí unikátny názov pre cache na základe cesty a času modifikácie."""
+        stat = img_path.stat()
+        key = f"{img_path}_{stat.st_mtime}"
+        hash_name = hashlib.md5(key.encode()).hexdigest()
+        return self.cache_dir / f"{hash_name}.jpg"
+
+    def check_scrolling(self, event=None):
+        """Aktualizuje scrollregion a skontroluje, či je potrebné posúvanie."""
+        self.canvas.update_idletasks()
+        bbox = self.canvas.bbox("all")
+        self.canvas.config(scrollregion=bbox)
+        content_height = bbox[3] if bbox else 0
+        canvas_height = self.canvas.winfo_height()
+        self.scrolling_needed = content_height > canvas_height
+
+    def on_mousewheel(self, event):
+        if self.scrolling_needed:
+            self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+    def on_mousewheel_up(self, event):
+        if self.scrolling_needed:
+            self.canvas.yview_scroll(-1, "units")
+
+    def on_mousewheel_down(self, event):
+        if self.scrolling_needed:
+            self.canvas.yview_scroll(1, "units")
+
+    def load_wallpapers(self):
+        """Načíta zoznam obrázkov a spustí ich spracovanie na pozadí."""
+        if not self.wallpaper_dir.exists():
+            Label(self.scrollable_frame, text=f"Adresár {self.wallpaper_dir} neexistuje!",
+                  fg="red", font=("Arial", 14)).pack(pady=20)
+            return
+
+        extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp')
+        images = sorted([f for f in self.wallpaper_dir.iterdir()
+                         if f.suffix.lower() in extensions])
+
+        if not images:
+            Label(self.scrollable_frame, text="Žiadne obrázky nenájdené!",
+                  fg="orange", font=("Arial", 14)).pack(pady=20)
+            return
+
+        # Spustíme vlákno na pozadí pre generovanie náhľadov
+        self.loading_thread = threading.Thread(target=self._process_images, args=(images,), daemon=True)
+        self.loading_thread.start()
+
+    def _process_images(self, images):
+        """Beží na pozadí: Generuje a ukladá náhľady do cache."""
+        for img_path in images:
+            cache_path = self.get_cache_path(img_path)
+            
+            if not cache_path.exists():
+                try:
+                    img = Image.open(img_path)
+                    img.thumbnail((250, 150), Image.Resampling.BILINEAR)
+                    img.save(cache_path, "JPEG", quality=85)
+                except Exception as e:
+                    print(f"Chyba pri spracovaní {img_path.name}: {e}")
+                    continue
+            
+            self.root.after(0, self._add_thumbnail_to_gui, img_path, cache_path)
+
+    def _add_thumbnail_to_gui(self, img_path, cache_path):
+        """Beží v hlavnom vlákne: Vytvorí GUI prvok z cache."""
+        frame = Frame(self.scrollable_frame, relief="ridge", borderwidth=2, bg="#303030")
+        frame.grid(row=self.row, column=self.col, padx=10, pady=10)
+        
+        self.col += 1
+        if self.col >= 5:
+            self.col = 0
+            self.row += 1
+
+        try:
+            img = Image.open(cache_path)
+            photo = ImageTk.PhotoImage(img)
+
+            label = Label(frame, image=photo, cursor="hand2", bg="#303030")
+            label.image = photo
+            label.pack()
+
+            label.bind("<Button-1>", lambda e, p=img_path: self.set_wallpaper(p))
+            label.bind("<Button-3>", lambda e, p=img_path: self.set_wallpaper(p, run_matugen=False))
+            label.bind("<Enter>", lambda e: frame.config(relief="solid", borderwidth=2))
+            label.bind("<Leave>", lambda e: frame.config(relief="ridge", borderwidth=2))
+            
+            self.check_scrolling()
+            
+        except Exception as e:
+            Label(frame, text=f"Chyba:\n{img_path.name}", fg="red").pack()
+
+    def set_wallpaper(self, img_path, run_matugen=True):
+        """Nastaví vybraný obrázok ako pozadie a voliteľne aktualizuje farby akcentov.
+
+        run_matugen=True  -> ľavý klik: pozadie + matugen (dynamické farby)
+        run_matugen=False -> pravý klik: iba pozadie, bez matugenu
+        """
+        try:
+            # 1. Aktualizácia wayfire.ini
+            self.update_wayfire_config(img_path)
+            
+            # 2. Reštart swaybg s novou tapetou
+            subprocess.run(["pkill", "swaybg"], check=False)
+            subprocess.Popen([
+                "swaybg",
+                "-i", str(img_path),
+                "-m", "fill"
+            ])
+            
+            if run_matugen:
+                # 3. Spustenie Matugenu s preferenciou darkness pre bezterminálový režim
+                result = subprocess.run(
+                    ["/home/mm/.local/bin/matugen", "image", str(img_path), "--prefer", "darkness"],
+                    capture_output=True,
+                    check=False
+                )
+                
+                if result.returncode != 0:
+                    print(f"Chyba matugenu: {result.stderr.decode('utf-8')}")
+              
+                print(f"Pozadie a dynamické farby nastavené: {img_path.name}")
+            else:
+                print(f"Pozadie nastavené (bez matugenu): {img_path.name}")
+            
+            self.root.destroy()
+        except Exception as e:
+            print(f"Chyba pri nastavovaní pozadia: {e}")
+
+    def update_wayfire_config(self, img_path):
+        """Aktualizuje wayfire.ini s novou cestou k pozadiu"""
+        if not self.wayfire_ini.exists():
+            return
+        with open(self.wayfire_ini, 'r') as f:
+            lines = f.readlines()
+        new_line = f"autostart0 = swaybg -i {img_path} -m fill\n"
+        with open(self.wayfire_ini, 'w') as f:
+            for line in lines:
+                if line.startswith("autostart0 = swaybg"):
+                    f.write(new_line)
+                else:
+                    f.write(line)
+
+    def run(self):
+        self.root.mainloop()
+
+if __name__ == "__main__":
+    WALLPAPER_DIR = "~/.config/wayfire/media/wallpaper"
+    app = WallpaperChooser(WALLPAPER_DIR)
+    app.run()

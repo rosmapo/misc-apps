@@ -1,0 +1,279 @@
+#!/usr/bin/python3
+
+import sys
+import subprocess
+import threading
+import time
+import gi
+
+gi.require_version('Gtk', '4.0')
+gi.require_version('Adw', '1')
+from gi.repository import Gtk, GLib, Adw
+
+# --- KONFIGURÁCIA ---
+I2C_BUS = "10"
+MONITOR_NAME = "Iiyama PL2493H"
+
+PRESET_MAP = [0x05, 0x06, 0x08]  # 6500K, 7500K, 9300K
+INPUT_MAP = [0x0F, 0x11]         # DisplayPort-1, HDMI-1
+
+class DisplayControlApp(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="com.mm.displaycontrol")
+        self.setting_lock = threading.Lock()
+        self.ignore_signals = False
+        self.slider_timers = {}
+        self.initial_values = {}
+        self.initial_wlsunset = False
+
+    def do_activate(self):
+        style_manager = Adw.StyleManager.get_default()
+        style_manager.set_color_scheme(Adw.ColorScheme.PREFER_DARK)
+
+        window = Adw.ApplicationWindow(application=self, title="Ovládanie monitora")
+        window.set_default_size(700, 600)
+
+        toolbar_view = Adw.ToolbarView()
+        header_bar = Adw.HeaderBar()
+        header_bar.set_title_widget(Adw.WindowTitle(title=MONITOR_NAME))
+        toolbar_view.add_top_bar(header_bar)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+        clamp = Adw.Clamp()
+        clamp.set_maximum_size(600)
+
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24)
+        main_box.set_margin_top(24)
+        main_box.set_margin_bottom(24)
+        main_box.set_margin_start(16)
+        main_box.set_margin_end(16)
+
+        clamp.set_child(main_box)
+        scroll.set_child(clamp)
+        toolbar_view.set_content(scroll)
+        window.set_content(toolbar_view)
+
+        # Obraz
+        img_group = Adw.PreferencesGroup()
+        main_box.append(img_group)
+        self.scale_br = self.add_slider_row(img_group, "Jas (Brightness)", 0x10)
+        self.scale_ct = self.add_slider_row(img_group, "Kontrast (Contrast)", 0x12)
+
+        # Farebné podanie
+        color_group = Adw.PreferencesGroup()
+        main_box.append(color_group)
+        self.dropdown_preset = Adw.ComboRow(
+            title="Teplota farieb",
+            model=Gtk.StringList.new(["6500 K", "7500 K", "9300 K"])
+        )
+        self.dropdown_preset.connect("notify::selected", self.on_preset_changed)
+        color_group.add(self.dropdown_preset)
+
+        # Vstup
+        power_group = Adw.PreferencesGroup()
+        main_box.append(power_group)
+        self.dropdown_input = Adw.ComboRow(
+            title="Obrazový vstup",
+            model=Gtk.StringList.new(["DisplayPort-1", "HDMI-1"])
+        )
+        self.dropdown_input.connect("notify::selected", self.on_input_changed)
+        power_group.add(self.dropdown_input)
+
+        # Filter
+        audio_group = Adw.PreferencesGroup()
+        main_box.append(audio_group)
+        self.bluelight_row = Adw.SwitchRow(title="Nočný režim (4500K)", subtitle="○ Vypnutý")
+        self.bluelight_row.connect("notify::active", self.on_bluelight_toggle)
+        audio_group.add(self.bluelight_row)
+
+        # Reset & status
+        bottom_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        bottom_box.set_halign(Gtk.Align.CENTER)
+        bottom_box.set_margin_top(10)
+
+        btn_reset = Gtk.Button(label="Obnoviť pôvodné nastavenie")
+        btn_reset.add_css_class("pill")
+        btn_reset.add_css_class("suggested-action")
+        btn_reset.connect("clicked", self.on_reset_clicked)
+        bottom_box.append(btn_reset)
+
+        self.lbl_status = Gtk.Label(label="Načítavam nastavenia...")
+        self.lbl_status.add_css_class("dim-label")
+        bottom_box.append(self.lbl_status)
+
+        main_box.append(bottom_box)
+
+        threading.Thread(target=self.load_initial_values, daemon=True).start()
+        window.present()
+
+    def add_slider_row(self, group, label_text, feature_code):
+        row = Adw.PreferencesRow()
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+
+        lbl = Gtk.Label(label=label_text, xalign=0)
+        lbl.set_size_request(150, -1)
+        box.append(lbl)
+
+        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        scale.set_hexpand(True)
+        scale.set_draw_value(True)
+        scale.set_valign(Gtk.Align.CENTER)
+        scale.connect("value-changed", self.on_slider_change, feature_code)
+        box.append(scale)
+
+        row.set_child(box)
+        group.add(row)
+        return scale
+
+    def get_vcp_value(self, feature_code):
+        """Podporuje continuous (C) aj simple non-continuous (SNC)."""
+        try:
+            cmd = ["ddcutil", "getvcp", f"{feature_code:02x}", "--bus", I2C_BUS, "--terse"]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                parts = result.stdout.split()
+                if 'C' in parts:
+                    return int(parts[parts.index('C') + 1])
+                if 'SNC' in parts:
+                    raw = parts[parts.index('SNC') + 1]
+                    raw = raw.lower().replace('0x', '').replace('x', '')
+                    return int(raw, 16)
+        except Exception as e:
+            print(f"Chyba čítania VCP {feature_code:02x}: {e}")
+        return None
+
+    def load_initial_values(self):
+        codes = [0x10, 0x12, 0x14, 0x60]
+        values = {}
+        for code in codes:
+            values[code] = self.get_vcp_value(code)
+
+        self.initial_values = values.copy()
+        is_wlsunset = self.check_wlsunset_running()
+        self.initial_wlsunset = is_wlsunset
+
+        GLib.idle_add(self.update_ui, values, is_wlsunset)
+        GLib.idle_add(self.lbl_status.set_text, "✓ Nastavenia načítané")
+
+    def update_ui(self, values, is_wlsunset):
+        self.ignore_signals = True
+
+        if values.get(0x10) is not None:
+            self.scale_br.set_value(values[0x10])
+        if values.get(0x12) is not None:
+            self.scale_ct.set_value(values[0x12])
+        if values.get(0x14) in PRESET_MAP:
+            self.dropdown_preset.set_selected(PRESET_MAP.index(values[0x14]))
+        if values.get(0x60) in INPUT_MAP:
+            self.dropdown_input.set_selected(INPUT_MAP.index(values[0x60]))
+
+        self.bluelight_row.set_active(is_wlsunset)
+        self.bluelight_row.set_subtitle("✓ Aktívny" if is_wlsunset else "○ Vypnutý")
+
+        self.ignore_signals = False
+
+    def on_slider_change(self, scale, feature_code):
+        if self.ignore_signals:
+            return
+        if feature_code in self.slider_timers:
+            GLib.source_remove(self.slider_timers[feature_code])
+        value = int(round(scale.get_value()))
+        self.slider_timers[feature_code] = GLib.timeout_add(
+            100, self._delayed_slider_send, feature_code, value
+        )
+
+    def _delayed_slider_send(self, feature_code, value):
+        self.slider_timers.pop(feature_code, None)
+        threading.Thread(target=self.set_vcp_value, args=(feature_code, value), daemon=True).start()
+        return False
+
+    def on_preset_changed(self, dropdown, param):
+        if self.ignore_signals:
+            return
+        idx = dropdown.get_selected()
+        if 0 <= idx < len(PRESET_MAP):
+            threading.Thread(target=self.set_vcp_value, args=(0x14, PRESET_MAP[idx], True), daemon=True).start()
+
+    def on_input_changed(self, dropdown, param):
+        if self.ignore_signals:
+            return
+        idx = dropdown.get_selected()
+        if 0 <= idx < len(INPUT_MAP):
+            threading.Thread(target=self.set_vcp_value, args=(0x60, INPUT_MAP[idx], True), daemon=True).start()
+
+    def set_vcp_value(self, feature_code, value, blocking=False):
+        timeout = 3.0 if blocking else 0
+        if not self.setting_lock.acquire(timeout=timeout):
+            return
+        try:
+            cmd = ["ddcutil", "setvcp", f"{feature_code:02x}", str(value), "--bus", I2C_BUS, "--noverify"]
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        except Exception as e:
+            print(f"Chyba zápisu VCP {feature_code:02x}: {e}")
+        finally:
+            self.setting_lock.release()
+
+    def check_wlsunset_running(self):
+        try:
+            result = subprocess.run(["pgrep", "-x", "wlsunset"], capture_output=True)
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def on_bluelight_toggle(self, switch, param):
+        if self.ignore_signals:
+            return
+        threading.Thread(target=self.toggle_wlsunset, args=(switch.get_active(),), daemon=True).start()
+
+    def toggle_wlsunset(self, enable):
+        try:
+            if enable:
+                subprocess.run(["killall", "wlsunset"], stderr=subprocess.DEVNULL)
+                time.sleep(0.1)
+                subprocess.Popen(
+                    ["wlsunset", "-t", "4500", "-T", "4501"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                GLib.idle_add(self.bluelight_row.set_subtitle, "✓ Aktívny")
+            else:
+                subprocess.run(["killall", "wlsunset"], stderr=subprocess.DEVNULL)
+                GLib.idle_add(self.bluelight_row.set_subtitle, "○ Vypnutý")
+        except Exception as e:
+            print(f"Chyba pri toggle wlsunset: {e}")
+
+    def on_reset_clicked(self, button):
+        def perform_reset():
+            GLib.idle_add(self.lbl_status.set_text, "⏳ Obnovujem nastavenia...")
+
+            for code, val in self.initial_values.items():
+                if val is None:
+                    continue
+                # Neposielaj setvcp, ak je hodnota už rovnaká
+                # (hlavne vstup 0x60 spôsobuje krátke zhasnutie monitora)
+                current = self.get_vcp_value(code)
+                if current == val:
+                    continue
+                self.set_vcp_value(code, val, blocking=True)
+
+            subprocess.run(["killall", "wlsunset"], stderr=subprocess.DEVNULL)
+            if self.initial_wlsunset:
+                time.sleep(0.1)
+                subprocess.Popen(
+                    ["wlsunset", "-t", "4500", "-T", "4501"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+
+            GLib.idle_add(self.update_ui, self.initial_values, self.initial_wlsunset)
+            GLib.idle_add(self.lbl_status.set_text, "✓ Nastavenia obnovené.")
+
+        threading.Thread(target=perform_reset, daemon=True).start()
+
+if __name__ == "__main__":
+    app = DisplayControlApp()
+    app.run(sys.argv)

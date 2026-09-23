@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Vlastné Záložky Grid",
+  "version": "1.0",
+  "description": "Vlastná stránka s náhľadmi záložiek v grid rozložení",
+  "permissions": [
+    "storage",
+    "bookmarks"
+  ],
+  "host_permissions": [
+    "https://s2.googleusercontent.com/*" 
+  ],
+  "chrome_url_overrides": {
+    "newtab": "newtab.html"
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

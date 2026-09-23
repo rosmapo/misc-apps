@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+  <meta charset="UTF-8" />
+  <title>Simplenote Token</title>
+  <style>
+    body {
+      font-family: -apple-system, "Segoe UI", sans-serif;
+      width: 320px;
+      padding: 12px;
+      margin: 0;
+    }
+    h1 {
+      font-size: 14px;
+      margin: 0 0 8px 0;
+    }
+    .token-box {
+      font-family: monospace;
+      font-size: 12px;
+      background: #f2f2f2;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 8px;
+      word-break: break-all;
+      min-height: 20px;
+      margin-bottom: 8px;
+    }
+    .meta {
+      font-size: 11px;
+      color: #666;
+      margin-bottom: 10px;
+    }
+    .buttons {
+      display: flex;
+      gap: 6px;
+    }
+    button {
+      flex: 1;
+      padding: 6px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .empty {
+      color: #999;
+      font-style: italic;
+    }
+    .warning {
+      font-size: 11px;
+      color: #a15c00;
+      background: #fff6e5;
+      border: 1px solid #f0d999;
+      border-radius: 4px;
+      padding: 6px;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Simplenote token</h1>
+  <div id="tokenBox" class="token-box empty">Zatiaľ nič nezachytené.</div>
+  <div id="meta" class="meta"></div>
+  <div class="buttons">
+    <button id="toggleBtn">Zobraziť</button>
+    <button id="copyBtn">Kopírovať</button>
+  </div>
+  <div class="warning">
+    Token funguje ako heslo k tvojmu účtu - nezdieľaj ho a nevkladaj ho
+    nikde mimo vlastnej appky.
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

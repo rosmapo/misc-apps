@@ -1,0 +1,1670 @@
+#!/usr/bin/env python3
+import gi, os, sys, subprocess, threading, queue, time, hashlib, configparser, shutil, concurrent.futures, urllib.parse
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Gtk, GdkPixbuf, Gdk, GLib, Gio, Adw
+from pathlib import Path
+
+try:
+    from PIL import Image, ImageOps
+    HAVE_PIL = True
+except ImportError:
+    HAVE_PIL = False
+
+# --- Predvolené nastavenia ---
+DEFAULT_CONFIG = {
+    'Paths': {
+        'default_folder': str(Path.home() / "Fotky/FotoCamera"),
+        'download_folder': str(Path.home() / "Downloads")
+    },
+    'Appearance': {
+        'columns': '6',
+        'background_color': '#1a1a1a',
+        'window_width': '1920',
+        'show_tooltips': 'true',
+        'show_notifications': 'true'
+    },
+    'Sorting': {
+        'sort_by': 'date',
+        'sort_order': 'descending'
+    },
+    'Openers': {
+        'image_opener': 'default',
+        'video_opener': 'default'
+    },
+    'Editors': {
+        'image_editor': 'gimp',
+        'video_editor': 'vlc',
+        'video_trimmer': 'gnome-video-trimmer'
+    },
+    'Commands': {
+        'cmd1': 'mpv --config-dir=$HOME/.config/mvi {folder}',
+        'cmd2': 'thunar {folder}',
+        'cmd3': ''
+    },
+    'Shortcuts': {
+        'quit': 'q',
+        'open_folder': 'o+ctrl',
+        'filter_images': 'F1',
+        'filter_videos': 'F2',
+        'filter_all': 'F3',
+        'command1': 'w+alt',
+        'command2': 'd+alt',
+        'command3': 'e+alt',
+        'settings': 's+ctrl',
+        'crop_freehand_toggle': 'f'
+    },
+    'Crop': {
+        'ratio': '3:2',
+        'orientation': 'automatic',
+        'custom_ratio': '3:2'
+    },
+    'About': {
+        'info': 'enabled'
+    }
+}
+
+FIELDS = {
+    'Paths': [
+        ('default_folder', 'folder', 'Predvolený priečinok pri štarte'),
+        ('download_folder', 'folder', 'Priečinok pre "skopírovať" (stredné tlačidlo)'),
+    ],
+    'Appearance': [
+        ('columns', 'int:1:30', 'Počet stĺpcov'),
+        ('background_color', 'color', 'Farba pozadia'),
+        ('window_width', 'int:200:10000', 'Šírka pre výpočet mriežky (px)'),
+        ('show_tooltips', 'bool', 'Zobrazovať tooltip s informáciami o súbore'),
+        ('show_notifications', 'bool', 'Zobrazovať oznámenia po skopírovaní / orezaní'),
+    ],
+    'Sorting': [
+        ('sort_by', 'combo:date,name', 'Zoradiť podľa'),
+        ('sort_order', 'combo:descending,ascending', 'Smer zoradenia'),
+    ],
+    'Openers': [
+        ('image_opener', 'text', 'Program na otváranie obrázkov ("default" = systémový)'),
+        ('video_opener', 'text', 'Program na otváranie videí ("default" = systémový)'),
+    ],
+    'Editors': [
+        ('image_editor', 'text', 'Editor obrázkov (Ctrl+klik)'),
+        ('video_editor', 'text', 'Editor videí (Ctrl+klik)'),
+        ('video_trimmer', 'text', 'Strihač videí (Pravý klik na video)'),
+    ],
+    'Commands': [
+        ('cmd1', 'text', 'Príkaz 1 (použi {folder} ako zástupný znak)'),
+        ('cmd2', 'text', 'Príkaz 2 (použi {folder} ako zástupný znak)'),
+        ('cmd3', 'text', 'Príkaz 3 (použi {folder} ako zástupný znak)'),
+    ],
+    'Shortcuts': [
+        ('quit', 'shortcut', 'Ukončiť aplikáciu'),
+        ('open_folder', 'shortcut', 'Otvoriť dialóg pre výber priečinka'),
+        ('filter_images', 'shortcut', 'Filter: len obrázky'),
+        ('filter_videos', 'shortcut', 'Filter: len videá'),
+        ('filter_all', 'shortcut', 'Filter: všetko'),
+        ('command1', 'shortcut', 'Spustiť príkaz 1'),
+        ('command2', 'shortcut', 'Spustiť príkaz 2'),
+        ('command3', 'shortcut', 'Spustiť príkaz 3'),
+        ('settings', 'shortcut', 'Otvoriť toto okno nastavení'),
+        ('crop_freehand_toggle', 'shortcut', 'Prepnúť free-hand orezávanie (v okne orezania)'),
+    ],
+    'Crop': [
+        ('ratio', 'combo:3:2,4:3,16:9,1:1,5:4,custom', 'Pomer orezania'),
+        ('orientation', 'combo:automatic,landscape,portrait', 'Orientácia'),
+        ('custom_ratio', 'text', 'Vlastný pomer (použije sa pri ratio=custom), formát W:H'),
+    ],
+    'About': [
+        ('desc', 'label', 'Galéria – Rýchla aplikácia na prehliadanie, správu a orezávanie fotografií a videí postavená na GTK4 a Libadwaita.'),
+        ('h_mouse', 'label', 'Pevné akcie myši (nedajú sa meniť):'),
+        ('m1', 'label', '• Ľavý klik: Otvorenie súboru v predvolenom programe'),
+        ('m2', 'label', '• Ctrl + Ľavý klik: Otvorenie súboru v editore'),
+        ('m3', 'label', '• Pravý klik (mriežka): Orezanie obrázka / Strih videa'),
+        ('m4', 'label', '• Stredný klik: Skopírovanie súboru do priečinka Stiahnutia'),
+        ('m5', 'label', '• Pravý klik (v orezaní): Potvrdenie a uloženie orezania'),
+        ('h_keys', 'label', 'Pevné klávesové skratky (nedajú sa meniť):'),
+        ('k1', 'label', '• Enter / Numpad Enter: Potvrdenie a uloženie orezania'),
+        ('k2', 'label', '• Escape: Zatvorenie okna orezania alebo nastavení'),
+    ],
+}
+
+CONFIG_DIR = Path.home() / ".config/galeria"
+CONFIG_FILE = CONFIG_DIR / "config.cfg"
+CACHE_DIR = Path.home() / ".cache/preview_thumbs"
+CACHE_DIR.mkdir(exist_ok=True)
+
+VIDEO_EXTS = ('.mp4', '.mkv', '.webm', '.avi', '.mov')
+IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp')
+
+GRID_MARGIN = 10
+GRID_SPACING = 8
+
+def save_config(config):
+    with open(CONFIG_FILE, 'w') as f:
+        config.write(f)
+
+def create_default_config():
+    CONFIG_DIR.mkdir(exist_ok=True)
+    config = configparser.ConfigParser()
+    for section, options in DEFAULT_CONFIG.items():
+        config[section] = options
+    save_config(config)
+    print(f"Vytvorený predvolený config: {CONFIG_FILE}")
+
+def load_config():
+    if not CONFIG_FILE.exists():
+        create_default_config()
+    config = configparser.ConfigParser()
+    config.read(CONFIG_FILE)
+    changed = False
+    for section, options in DEFAULT_CONFIG.items():
+        if section not in config:
+            config[section] = {}
+            changed = True
+        for key, value in options.items():
+            if key not in config[section]:
+                config[section][key] = value
+                changed = True
+        for key in list(config[section].keys()):
+            if key not in options:
+                del config[section][key]
+                changed = True
+    for section in list(config.sections()):
+        if section not in DEFAULT_CONFIG:
+            config.remove_section(section)
+            changed = True
+    if changed:
+        save_config(config)
+    return config
+
+def get_cache_path(file_path, thumb_size=None, bg_color=None):
+    key = str(Path(file_path).absolute())
+    if thumb_size is not None:
+        key += f"@{int(thumb_size)}"
+    path_hash = hashlib.md5(key.encode()).hexdigest()
+    return CACHE_DIR / f"{path_hash}.png"
+
+def hex_to_pixbuf_rgba(hex_color, alpha=0xff):
+    h = (hex_color or '#1a1a1a').strip().lstrip('#')
+    if len(h) >= 8:
+        r, g, b, a = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), int(h[6:8], 16)
+    elif len(h) >= 6:
+        r, g, b, a = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha
+    else:
+        r, g, b, a = 0x1a, 0x1a, 0x1a, alpha
+    return (r << 24) | (g << 16) | (b << 8) | a
+
+def fit_pixbuf_contain(pixbuf, size):
+    w, h = pixbuf.get_width(), pixbuf.get_height()
+    if w <= 0 or h <= 0:
+        return pixbuf
+    if w <= size and h <= size and (w == size or h == size):
+        if w == size or h == size:
+            return pixbuf
+    scale = min(size / w, size / h)
+    nw = max(1, int(round(w * scale)))
+    nh = max(1, int(round(h * scale)))
+    if nw == w and nh == h:
+        return pixbuf
+    return pixbuf.scale_simple(nw, nh, GdkPixbuf.InterpType.BILINEAR)
+
+def resolve_initial_folder(arg):
+    if not arg:
+        return None
+    try:
+        if arg.startswith('file://'):
+            arg = urllib.parse.unquote(urllib.parse.urlparse(arg).path)
+        p = Path(arg).expanduser().resolve()
+        if p.is_dir():
+            return p
+        if p.is_file():
+            return p.parent
+    except Exception as e:
+        print(f"Nepodarilo sa spracovať argument priečinka '{arg}': {e}")
+    return None
+
+MOD_NAMES = {'ctrl', 'alt', 'shift'}
+KEY_NAME_ALIASES = {
+    'esc': 'Escape', 'escape': 'Escape',
+    'delete': 'Delete', 'del': 'Delete',
+    'backspace': 'BackSpace',
+    'insert': 'Insert', 'ins': 'Insert',
+    'tab': 'Tab',
+    'home': 'Home', 'end': 'End',
+    'pageup': 'Page_Up', 'page_up': 'Page_Up',
+    'pagedown': 'Page_Down', 'page_down': 'Page_Down',
+    'up': 'Up', 'down': 'Down', 'left': 'Left', 'right': 'Right',
+    'return': 'Return', 'enter': 'Return',
+    'space': 'space',
+    'comma': 'comma', 'period': 'period',
+    'minus': 'minus', 'plus': 'plus', 'equal': 'equal',
+    'slash': 'slash', 'backslash': 'backslash',
+}
+for _i in range(1, 13):
+    KEY_NAME_ALIASES[f'f{_i}'] = f'F{_i}'
+
+KEYVAL_DISPLAY_NAMES = {
+    'Escape': 'escape', 'Delete': 'delete', 'BackSpace': 'backspace',
+    'Insert': 'insert', 'Tab': 'tab', 'Home': 'home', 'End': 'end',
+    'Page_Up': 'pageup', 'Page_Down': 'pagedown',
+    'Up': 'up', 'Down': 'down', 'Left': 'left', 'Right': 'right',
+    'Return': 'return', 'space': 'space',
+    'comma': 'comma', 'period': 'period', 'minus': 'minus', 'plus': 'plus',
+    'equal': 'equal', 'slash': 'slash', 'backslash': 'backslash',
+}
+for _i in range(1, 13):
+    KEYVAL_DISPLAY_NAMES[f'F{_i}'] = f'f{_i}'
+
+MODIFIER_KEYVALS = {
+    Gdk.KEY_Control_L, Gdk.KEY_Control_R,
+    Gdk.KEY_Alt_L, Gdk.KEY_Alt_R,
+    Gdk.KEY_Shift_L, Gdk.KEY_Shift_R,
+    Gdk.KEY_Super_L, Gdk.KEY_Super_R,
+    Gdk.KEY_Meta_L, Gdk.KEY_Meta_R,
+    Gdk.KEY_ISO_Level3_Shift,
+    Gdk.KEY_Caps_Lock, Gdk.KEY_Num_Lock,
+}
+
+def resolve_keyval(key):
+    key = key.strip()
+    if not key:
+        return 0
+    if len(key) == 1:
+        return Gdk.keyval_from_name(key)
+    name = KEY_NAME_ALIASES.get(key.lower(), key)
+    return Gdk.keyval_from_name(name)
+
+def parse_shortcut(shortcut_str):
+    tokens = [t.strip().lower() for t in shortcut_str.split('+') if t.strip()]
+    modifiers = [t for t in tokens if t in MOD_NAMES]
+    keys = [t for t in tokens if t not in MOD_NAMES]
+    keyval = resolve_keyval(keys[0]) if keys else 0
+    if keyval:
+        keyval = Gdk.keyval_to_lower(keyval)
+    modifier_mask = 0
+    if 'ctrl' in modifiers:
+        modifier_mask |= Gdk.ModifierType.CONTROL_MASK
+    if 'alt' in modifiers:
+        modifier_mask |= Gdk.ModifierType.ALT_MASK
+    if 'shift' in modifiers:
+        modifier_mask |= Gdk.ModifierType.SHIFT_MASK
+    return keyval, modifier_mask
+
+def validate_shortcuts(config):
+    seen = {}
+    for name, value in config['Shortcuts'].items():
+        keyval, mod = parse_shortcut(value)
+        if keyval == 0:
+            print(f"[UPOZORNENIE] Skratka '{name}' = '{value}' obsahuje neznámu klávesu.")
+            continue
+        combo = (keyval, mod)
+        if combo in seen:
+            print(f"[UPOZORNENIE] Skratky '{seen[combo]}' a '{name}' (hodnota '{value}') "
+                  f"používajú rovnakú kombináciu kláves - zareaguje len '{seen[combo]}'.")
+        else:
+            seen[combo] = name
+
+def rgba_to_hex(rgba):
+    r = round(rgba.red * 255)
+    g = round(rgba.green * 255)
+    b = round(rgba.blue * 255)
+    a = round(rgba.alpha * 255)
+    return f"#{r:02x}{g:02x}{b:02x}{a:02x}"
+
+def parse_ratio(ratio_str):
+    try:
+        ratio_str = ratio_str.strip().replace(',', '.').replace('/', ':')
+        if ':' not in ratio_str:
+            return None
+        w, h = ratio_str.split(':', 1)
+        w, h = float(w), float(h)
+        if w <= 0 or h <= 0:
+            return None
+        return w, h
+    except Exception:
+        return None
+
+def format_size(size_bytes):
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+# --- Okno na orezanie ---
+class CropWindow(Adw.Window):
+    def __init__(self, parent, image_path, download_folder, ratio_str="3:2"):
+        super().__init__()
+        self.set_transient_for(parent)
+        self.set_modal(True)
+        self.set_default_size(1200, 800)
+        self.set_title(f"Orezať – {image_path.name}")
+        self.image_path = Path(image_path)
+        self.download_folder = Path(download_folder)
+        self.ratio_label = ratio_str
+        self.parent_window = parent
+
+        try:
+            self.orig_pixbuf = GdkPixbuf.Pixbuf.new_from_file(str(self.image_path))
+            self.orig_pixbuf = self.orig_pixbuf.apply_embedded_orientation()
+        except Exception as e:
+            print(f"Chyba pri načítaní {image_path}: {e}")
+            self.close()
+            return
+
+        self.orig_w = self.orig_pixbuf.get_width()
+        self.orig_h = self.orig_pixbuf.get_height()
+
+        parsed = parse_ratio(ratio_str)
+        if parsed is None:
+            print(f"Neplatný pomer '{ratio_str}', používam 3:2")
+            target_w, target_h = 3.0, 2.0
+            self.ratio_label = "3:2"
+        else:
+            target_w, target_h = parsed
+
+        target_aspect = target_w / target_h
+        self.target_aspect = target_aspect
+        img_aspect = self.orig_w / self.orig_h
+
+        if img_aspect > target_aspect:
+            self.crop_h = self.orig_h
+            self.crop_w = int(round(self.crop_h * target_aspect))
+            if self.crop_w > self.orig_w:
+                self.crop_w = self.orig_w
+                self.crop_h = int(round(self.crop_w / target_aspect))
+            self.move_axis = 'x'
+        else:
+            self.crop_w = self.orig_w
+            self.crop_h = int(round(self.crop_w / target_aspect))
+            if self.crop_h > self.orig_h:
+                self.crop_h = self.orig_h
+                self.crop_w = int(round(self.crop_h * target_aspect))
+            self.move_axis = 'y'
+
+        self.crop_x = (self.orig_w - self.crop_w) // 2
+        self.crop_y = (self.orig_h - self.crop_h) // 2
+
+        self.freehand_mode = False
+        self.MIN_CROP = 20
+        self.HANDLE_MARGIN = 10
+
+        self.area = Gtk.DrawingArea()
+        self.area.set_draw_func(self.on_draw)
+        self.area.set_hexpand(True)
+        self.area.set_vexpand(True)
+        self.set_content(self.area)
+
+        self.drag_start = None
+        self.drag_mode = None
+        click = Gtk.GestureClick.new()
+        click.set_button(1)
+        click.connect("pressed", self.on_press)
+        click.connect("released", self.on_release)
+        self.area.add_controller(click)
+        
+        right_click = Gtk.GestureClick.new()
+        right_click.set_button(3)
+        right_click.connect("pressed", lambda *a: self.do_crop())
+        self.area.add_controller(right_click)
+
+        motion = Gtk.EventControllerMotion()
+        motion.connect("motion", self.on_motion)
+        self.area.add_controller(motion)
+
+        key = Gtk.EventControllerKey()
+        key.connect("key-pressed", self.on_key)
+        self.add_controller(key)
+
+        self.area.connect("resize", lambda *a: self.area.queue_draw())
+        self.present()
+
+    def _scale_factor(self):
+        aw = self.area.get_width()
+        ah = self.area.get_height()
+        if aw <= 1 or ah <= 1:
+            return 1.0, 0, 0, self.orig_w, self.orig_h
+        scale = min(aw / self.orig_w, ah / self.orig_h)
+        disp_w = int(self.orig_w * scale)
+        disp_h = int(self.orig_h * scale)
+        ox = (aw - disp_w) // 2
+        oy = (ah - disp_h) // 2
+        return scale, ox, oy, disp_w, disp_h
+
+    def on_draw(self, area, cr, width, height):
+        scale, ox, oy, dw, dh = self._scale_factor()
+
+        cr.set_source_rgb(0.1, 0.1, 0.1)
+        cr.paint()
+
+        cr.save()
+        cr.translate(ox, oy)
+        cr.scale(scale, scale)
+        Gdk.cairo_set_source_pixbuf(cr, self.orig_pixbuf, 0, 0)
+        cr.paint()
+        cr.restore()
+
+        cr.set_source_rgba(0, 0, 0, 0.55)
+        cr.rectangle(0, 0, width, height)
+        rx = ox + self.crop_x * scale
+        ry = oy + self.crop_y * scale
+        rw = self.crop_w * scale
+        rh = self.crop_h * scale
+        cr.rectangle(rx, ry, rw, rh)
+        cr.set_fill_rule(1)
+        cr.fill()
+
+        cr.set_source_rgb(1.0, 0.85, 0.1)
+        cr.set_line_width(2.5)
+        cr.rectangle(rx, ry, rw, rh)
+        cr.stroke()
+
+        if self.freehand_mode:
+            self._draw_handles(cr, rx, ry, rw, rh)
+
+        cr.set_source_rgb(1, 1, 1)
+        cr.select_font_face("Sans", 0, 0)
+        cr.set_font_size(14)
+        freehand_shortcut = self.parent_window.config.get('Shortcuts', 'crop_freehand_toggle', fallback='f')
+        text = f"{self.ratio_label}  |  {self.crop_w}×{self.crop_h}"
+        cr.move_to(12, height - 14)
+        cr.show_text(text)
+
+    def _draw_handles(self, cr, rx, ry, rw, rh):
+        half = 9
+        points = [
+            (rx, ry), (rx + rw, ry), (rx, ry + rh), (rx + rw, ry + rh),
+            (rx + rw / 2, ry), (rx + rw / 2, ry + rh),
+            (rx, ry + rh / 2), (rx + rw, ry + rh / 2),
+        ]
+        for px, py in points:
+            cr.set_source_rgba(0, 0, 0, 0.75)
+            cr.rectangle(px - half, py - half, half * 2, half * 2)
+            cr.fill()
+            cr.set_source_rgb(1.0, 0.85, 0.1)
+            inner = half - 3
+            cr.rectangle(px - inner, py - inner, inner * 2, inner * 2)
+            cr.fill()
+
+    def _hit_test(self, sx, sy, rx, ry, rw, rh):
+        m = self.HANDLE_MARGIN
+        near_left = abs(sx - rx) <= m
+        near_right = abs(sx - (rx + rw)) <= m
+        near_top = abs(sy - ry) <= m
+        near_bottom = abs(sy - (ry + rh)) <= m
+        within_x = rx - m <= sx <= rx + rw + m
+        within_y = ry - m <= sy <= ry + rh + m
+
+        if near_left and near_top and within_x and within_y:
+            return 'corner-TL'
+        if near_right and near_top and within_x and within_y:
+            return 'corner-TR'
+        if near_left and near_bottom and within_x and within_y:
+            return 'corner-BL'
+        if near_right and near_bottom and within_x and within_y:
+            return 'corner-BR'
+        if near_left and ry <= sy <= ry + rh:
+            return 'edge-left'
+        if near_right and ry <= sy <= ry + rh:
+            return 'edge-right'
+        if near_top and rx <= sx <= rx + rw:
+            return 'edge-top'
+        if near_bottom and rx <= sx <= rx + rw:
+            return 'edge-bottom'
+        if rx <= sx <= rx + rw and ry <= sy <= ry + rh:
+            return 'move'
+        return None
+
+    def _fit_size_to_image(self, w, h, aspect):
+        if w > self.orig_w:
+            w = self.orig_w
+            h = w / aspect
+        if h > self.orig_h:
+            h = self.orig_h
+            w = h * aspect
+        return max(self.MIN_CROP, w), max(self.MIN_CROP, h)
+
+    def _clamp_rect_to_image(self, x, y, w, h):
+        w = min(w, self.orig_w)
+        h = min(h, self.orig_h)
+        x = max(0, min(x, self.orig_w - w))
+        y = max(0, min(y, self.orig_h - h))
+        return x, y, w, h
+
+    def _resize_crop(self, mode, img_x, img_y, start_cx, start_cy, start_cw, start_ch):
+        aspect = start_cw / start_ch
+
+        if mode == 'corner-BR':
+            ax, ay = start_cx, start_cy
+            raw_w, raw_h = img_x - ax, img_y - ay
+        elif mode == 'corner-TL':
+            ax, ay = start_cx + start_cw, start_cy + start_ch
+            raw_w, raw_h = ax - img_x, ay - img_y
+        elif mode == 'corner-TR':
+            ax, ay = start_cx, start_cy + start_ch
+            raw_w, raw_h = img_x - ax, ay - img_y
+        elif mode == 'corner-BL':
+            ax, ay = start_cx + start_cw, start_cy
+            raw_w, raw_h = ax - img_x, img_y - ay
+        elif mode == 'edge-right':
+            ax = start_cx
+            raw_w = img_x - ax
+        elif mode == 'edge-left':
+            ax = start_cx + start_cw
+            raw_w = ax - img_x
+        elif mode == 'edge-bottom':
+            ay = start_cy
+            raw_h = img_y - ay
+        elif mode == 'edge-top':
+            ay = start_cy + start_ch
+            raw_h = ay - img_y
+        else:
+            return
+
+        if mode.startswith('corner'):
+            raw_w = max(raw_w, self.MIN_CROP)
+            raw_h = max(raw_h, self.MIN_CROP)
+            if raw_w / raw_h > aspect:
+                new_h = raw_h
+                new_w = new_h * aspect
+            else:
+                new_w = raw_w
+                new_h = new_w / aspect
+            new_w, new_h = self._fit_size_to_image(new_w, new_h, aspect)
+
+            if mode == 'corner-BR':
+                new_x, new_y = ax, ay
+            elif mode == 'corner-TL':
+                new_x, new_y = ax - new_w, ay - new_h
+            elif mode == 'corner-TR':
+                new_x, new_y = ax, ay - new_h
+            else:
+                new_x, new_y = ax - new_w, ay
+
+            new_x, new_y, new_w, new_h = self._clamp_rect_to_image(new_x, new_y, new_w, new_h)
+
+        elif mode in ('edge-right', 'edge-left'):
+            new_h = start_ch
+            new_y = start_cy
+            if mode == 'edge-right':
+                max_w = max(self.MIN_CROP, self.orig_w - ax)
+                new_w = min(max(raw_w, self.MIN_CROP), max_w)
+                new_x = ax
+            else:
+                max_w = max(self.MIN_CROP, ax)
+                new_w = min(max(raw_w, self.MIN_CROP), max_w)
+                new_x = ax - new_w
+
+        else:
+            new_w = start_cw
+            new_x = start_cx
+            if mode == 'edge-bottom':
+                max_h = max(self.MIN_CROP, self.orig_h - ay)
+                new_h = min(max(raw_h, self.MIN_CROP), max_h)
+                new_y = ay
+            else:
+                max_h = max(self.MIN_CROP, ay)
+                new_h = min(max(raw_h, self.MIN_CROP), max_h)
+                new_y = ay - new_h
+
+        self.crop_x, self.crop_y = int(round(new_x)), int(round(new_y))
+        self.crop_w, self.crop_h = max(1, int(round(new_w))), max(1, int(round(new_h)))
+
+    def on_press(self, gesture, n_press, x, y):
+        scale, ox, oy, _, _ = self._scale_factor()
+
+        if self.freehand_mode:
+            rx = ox + self.crop_x * scale
+            ry = oy + self.crop_y * scale
+            rw = self.crop_w * scale
+            rh = self.crop_h * scale
+            hit = self._hit_test(x, y, rx, ry, rw, rh)
+            if hit is None:
+                self.drag_mode = None
+                self.drag_start = None
+                return
+            self.drag_mode = hit
+            self.drag_start = (x, y, self.crop_x, self.crop_y, self.crop_w, self.crop_h)
+            return
+
+        img_x = (x - ox) / scale
+        img_y = (y - oy) / scale
+        if (self.crop_x <= img_x <= self.crop_x + self.crop_w and
+                self.crop_y <= img_y <= self.crop_y + self.crop_h):
+            self.drag_mode = 'move'
+            self.drag_start = (x, y, self.crop_x, self.crop_y, self.crop_w, self.crop_h)
+
+    def on_release(self, gesture, n_press, x, y):
+        self.drag_start = None
+        self.drag_mode = None
+
+    def on_motion(self, controller, x, y):
+        if self.drag_start is None or self.drag_mode is None:
+            return
+        scale, ox, oy, _, _ = self._scale_factor()
+        start_x, start_y, start_cx, start_cy, start_cw, start_ch = self.drag_start
+
+        if self.drag_mode == 'move':
+            dx = (x - start_x) / scale
+            dy = (y - start_y) / scale
+            if self.freehand_mode:
+                new_x = max(0, min(start_cx + dx, self.orig_w - self.crop_w))
+                new_y = max(0, min(start_cy + dy, self.orig_h - self.crop_h))
+                self.crop_x, self.crop_y = int(round(new_x)), int(round(new_y))
+            elif self.move_axis == 'x':
+                new_x = int(start_cx + dx)
+                self.crop_x = max(0, min(new_x, self.orig_w - self.crop_w))
+            else:
+                new_y = int(start_cy + dy)
+                self.crop_y = max(0, min(new_y, self.orig_h - self.crop_h))
+            self.area.queue_draw()
+            return
+
+        img_x = (x - ox) / scale
+        img_y = (y - oy) / scale
+        self._resize_crop(self.drag_mode, img_x, img_y, start_cx, start_cy, start_cw, start_ch)
+        self.area.queue_draw()
+
+    def on_key(self, controller, keyval, keycode, state):
+        keyval_lower = Gdk.keyval_to_lower(keyval)
+        if keyval_lower == Gdk.KEY_Return or keyval_lower == Gdk.KEY_KP_Enter:
+            self.do_crop()
+            return True
+        if keyval_lower == Gdk.KEY_Escape:
+            self.close()
+            return True
+
+        relevant_mods = (Gdk.ModifierType.CONTROL_MASK |
+                          Gdk.ModifierType.ALT_MASK |
+                          Gdk.ModifierType.SHIFT_MASK)
+        mod = state & relevant_mods
+        shortcut_str = self.parent_window.config.get('Shortcuts', 'crop_freehand_toggle', fallback='f')
+        want_key, want_mod = parse_shortcut(shortcut_str)
+        if want_key and keyval_lower == want_key and mod == want_mod:
+            self.freehand_mode = not self.freehand_mode
+            self.drag_mode = None
+            self.drag_start = None
+            self.area.queue_draw()
+            return True
+
+        return False
+
+    def do_crop(self):
+        try:
+            cropped = self.orig_pixbuf.new_subpixbuf(
+                self.crop_x, self.crop_y, self.crop_w, self.crop_h
+            )
+            stem = self.image_path.stem
+            suffix = self.image_path.suffix.lower()
+            if suffix not in ('.jpg', '.jpeg', '.png', '.webp'):
+                suffix = '.jpg'
+            dest = self.download_folder / f"{stem}_crop{suffix}"
+            counter = 1
+            while dest.exists():
+                dest = self.download_folder / f"{stem}_crop_{counter}{suffix}"
+                counter += 1
+
+            if suffix in ('.jpg', '.jpeg'):
+                cropped.savev(str(dest), "jpeg", ["quality"], ["92"])
+            elif suffix == '.png':
+                cropped.savev(str(dest), "png", [], [])
+            elif suffix == '.webp':
+                cropped.savev(str(dest), "webp", ["quality"], ["90"])
+            else:
+                cropped.savev(str(dest), "jpeg", ["quality"], ["92"])
+
+            print(f"Orezané ({self.ratio_label}): {dest}")
+            if hasattr(self.parent_window, 'show_toast'):
+                self.parent_window.show_toast(f"Orezané: {dest.name}")
+            self.close()
+        except Exception as e:
+            print(f"Chyba pri orezávaní: {e}")
+
+# --- Hlavná trieda ---
+class PreviewWindow(Adw.ApplicationWindow):
+    def __init__(self, app, initial_folder=None):
+        super().__init__(application=app, title="Galéria")
+        self.config = load_config()
+        validate_shortcuts(self.config)
+
+        self.columns = int(self.config['Appearance']['columns'])
+        self.spacing = GRID_SPACING
+        self.margin = GRID_MARGIN
+        self.bg_color = self.config['Appearance']['background_color']
+        self.hide_scrollbar = True
+        self.show_tooltips = self.config.getboolean('Appearance', 'show_tooltips', fallback=True)
+        self.show_notifications = self.config.getboolean('Appearance', 'show_notifications', fallback=True)
+        self.image_opener = self.config['Openers']['image_opener']
+        self.video_opener = self.config['Openers']['video_opener']
+        self.image_editor = self.config.get('Editors', 'image_editor', fallback='gimp')
+        self.video_editor = self.config.get('Editors', 'video_editor', fallback='vlc')
+        self.video_trimmer = self.config.get('Editors', 'video_trimmer', fallback='gnome-video-trimmer')
+
+        download_folder = Path(os.path.expandvars(
+            self.config.get('Paths', 'download_folder', fallback=str(Path.home() / "Downloads"))
+        ))
+        self.download_folder = download_folder if download_folder.exists() else Path.home() / "Downloads"
+        self.download_folder.mkdir(exist_ok=True)
+
+        window_width = int(self.config.get('Appearance', 'window_width', fallback='1920'))
+
+        available_width = window_width - 2 * GRID_MARGIN - (self.columns - 1) * GRID_SPACING
+        self.thumb_size = max(16, available_width // max(1, self.columns))
+        self._fixed_layout_width = None
+
+        self.thumbnails_loaded = False
+        self.set_default_size(window_width, 1080)
+        self.fullscreen()
+        self._apply_css()
+
+        default_folder = Path(os.path.expandvars(self.config['Paths']['default_folder']))
+        if initial_folder is not None and initial_folder.exists():
+            self.current_folder = initial_folder
+        else:
+            self.current_folder = default_folder if default_folder.exists() else Path.home()
+        self.current_filter = 'all'
+
+        self.toast_overlay = Adw.ToastOverlay()
+        self.set_content(self.toast_overlay)
+
+        self.grid_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=GRID_SPACING)
+        self.grid_box.set_valign(Gtk.Align.START)
+        self.grid_box.set_halign(Gtk.Align.START)
+        self.grid_box.set_hexpand(False)
+        self.grid_box.set_can_focus(False)
+
+        self.grid_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.grid_wrap.set_margin_start(GRID_MARGIN)
+        self.grid_wrap.set_margin_end(GRID_MARGIN)
+        self.grid_wrap.set_margin_top(GRID_MARGIN)
+        self.grid_wrap.set_margin_bottom(GRID_MARGIN)
+        self.grid_wrap.set_halign(Gtk.Align.START)
+        self.grid_wrap.set_hexpand(False)
+        self.grid_wrap.append(self.grid_box)
+
+        self.scrolled = Gtk.ScrolledWindow()
+        self.scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.scrolled.set_overlay_scrolling(True)
+        try:
+            self.scrolled.set_has_frame(False)
+        except Exception:
+            pass
+        self.scrolled.set_child(self.grid_wrap)
+        self.scrolled.set_vexpand(True)
+        self.toast_overlay.set_child(self.scrolled)
+
+        self.flowbox = self.grid_box
+
+        key_controller = Gtk.EventControllerKey()
+        key_controller.connect("key-pressed", self.on_key_press)
+        self.add_controller(key_controller)
+
+        self.thumb_queue = queue.Queue()
+        self.widget_map = {}
+        self.file_widgets = {}
+
+        self.load_folder(self.current_folder)
+        self.thumbnails_loaded = True
+
+        self._recalc_attempts = 0
+        self.connect("realize", self.on_window_realize)
+
+    def show_toast(self, message, duration=2):
+        if not self.show_notifications:
+            return
+        self.toast_overlay.add_toast(Adw.Toast(title=message, timeout=duration))
+
+    def _apply_css(self):
+        css_provider = Gtk.CssProvider()
+        css_provider.load_from_data(f"""
+            window {{
+                background-color: {self.bg_color};
+            }}
+            scrollbar {{
+                opacity: 0;
+                min-width: 0;
+                min-height: 0;
+                margin: 0;
+                padding: 0;
+            }}
+            scrollbar slider {{
+                min-width: 0;
+                min-height: 0;
+            }}
+            scrolledwindow {{
+                background: transparent;
+            }}
+            flowboxchild,
+            flowboxchild:focus,
+            flowboxchild:focus-visible,
+            flowboxchild:selected {{
+                outline: none;
+                box-shadow: none;
+                border: none;
+            }}
+        """.encode())
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(),
+            css_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        if hasattr(self, 'scrolled') and self.scrolled is not None:
+            self.scrolled.set_overlay_scrolling(True)
+
+    def on_window_realize(self, widget):
+        self._recalc_attempts = 0
+        GLib.idle_add(self._lock_layout_width)
+        GLib.timeout_add(50, self._lock_layout_width)
+        GLib.timeout_add(200, self.recalculate_if_needed)
+
+    def _viewport_width(self):
+        try:
+            return max(200, int(self.config.get('Appearance', 'window_width', fallback='1920')))
+        except (TypeError, ValueError):
+            return 1920
+
+    def _lock_layout_width(self):
+        self._fixed_layout_width = self._viewport_width()
+        return False
+
+    def _compute_thumb_size(self, width=None):
+        if width is None or width <= 1:
+            width = self._viewport_width()
+        cols = max(1, self.columns)
+        usable = width - 2 * GRID_MARGIN - (cols - 1) * GRID_SPACING
+        return max(16, usable // cols)
+
+    def _apply_grid_geometry(self):
+        cols = max(1, self.columns)
+        width = self._viewport_width()
+        self.spacing = GRID_SPACING
+        self.thumb_size = self._compute_thumb_size(width)
+        row_w = cols * self.thumb_size + (cols - 1) * GRID_SPACING
+        leftover = max(0, width - row_w - 2 * GRID_MARGIN)
+        self.margin_left = GRID_MARGIN + leftover // 2
+        self.margin_right = GRID_MARGIN + leftover - leftover // 2
+        self.margin = self.margin_left
+
+        self.grid_box.set_spacing(GRID_SPACING)
+        self.grid_box.set_size_request(row_w, -1)
+        self.grid_box.set_hexpand(False)
+        self.grid_box.set_halign(Gtk.Align.START)
+        if hasattr(self, 'grid_wrap') and self.grid_wrap is not None:
+            self.grid_wrap.set_margin_start(self.margin_left)
+            self.grid_wrap.set_margin_end(self.margin_right)
+            self.grid_wrap.set_margin_top(GRID_MARGIN)
+            self.grid_wrap.set_margin_bottom(GRID_MARGIN)
+            self.grid_wrap.set_size_request(row_w, -1)
+
+    def recalculate_if_needed(self):
+        self._lock_layout_width()
+        new_ts = self._compute_thumb_size()
+        if abs(new_ts - self.thumb_size) >= 1:
+            self._apply_grid_geometry()
+            self.load_folder(self.current_folder)
+        return False
+
+    def _make_tooltip(self, path):
+        try:
+            stat = path.stat()
+            size = format_size(stat.st_size)
+            mtime = time.strftime("%d.%m.%Y %H:%M", time.localtime(stat.st_mtime))
+            res = ""
+            if path.suffix.lower() in IMAGE_EXTS:
+                try:
+                    info = GdkPixbuf.Pixbuf.get_file_info(str(path))
+                    if info and info[1] > 0:
+                        res = f"\n{info[1]} × {info[2]}"
+                except Exception:
+                    pass
+            return f"{path.name}\n{size}  •  {mtime}{res}"
+        except Exception:
+            return path.name
+
+    def load_folder(self, folder):
+        if not folder.exists():
+            print(f"Adresár neexistuje: {folder}")
+            return
+        self.current_folder = folder
+        child = self.grid_box.get_first_child()
+        while child is not None:
+            self.grid_box.remove(child)
+            child = self.grid_box.get_first_child()
+        self.widget_map.clear()
+        self.file_widgets.clear()
+        self.thumb_queue = queue.Queue()
+
+        all_files = [f for f in folder.iterdir() if f.suffix.lower() in IMAGE_EXTS + VIDEO_EXTS]
+
+        sort_by = self.config.get('Sorting', 'sort_by', fallback='date').strip().lower()
+        sort_order = self.config.get('Sorting', 'sort_order', fallback='descending').strip().lower()
+        reverse = (sort_order == 'descending')
+
+        if sort_by == 'name':
+            all_files.sort(key=lambda f: f.name.lower(), reverse=reverse)
+        else:
+            all_files.sort(key=lambda f: f.stat().st_mtime, reverse=reverse)
+
+        self.all_files = all_files
+        self.load_thumbnails(all_files)
+        self.set_title(f"Galéria – {folder}")
+
+    def load_thumbnails(self, files):
+        ts = self.thumb_size
+        cols = max(1, self.columns)
+        row_w = cols * ts + (cols - 1) * GRID_SPACING
+        self.grid_box.set_size_request(row_w, -1)
+
+        visible = []
+        for f in files:
+            ft = 'image' if f.suffix.lower() in IMAGE_EXTS else 'video'
+            if self.current_filter == 'images' and ft != 'image':
+                continue
+            if self.current_filter == 'videos' and ft != 'video':
+                continue
+            visible.append((f, ft))
+
+        current_row = None
+        col_in_row = 0
+
+        for f, file_type in visible:
+            cache_file = get_cache_path(f, ts, self.bg_color)
+
+            if cache_file.exists() and cache_file.stat().st_size > 0:
+                try:
+                    pixbuf = GdkPixbuf.Pixbuf.new_from_file(str(cache_file))
+                except Exception as e:
+                    print(f"Chyba pri načítaní cache {cache_file}: {e}")
+                    try:
+                        cache_file.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    pixbuf = self.create_placeholder()
+                    self.thumb_queue.put(f)
+            else:
+                if cache_file.exists():
+                    try:
+                        cache_file.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                pixbuf = self.create_placeholder()
+                self.thumb_queue.put(f)
+
+            pixbuf = fit_pixbuf_contain(pixbuf, ts)
+
+            texture = Gdk.Texture.new_for_pixbuf(pixbuf)
+            image = Gtk.Image.new_from_paintable(texture)
+            iw, ih = pixbuf.get_width(), pixbuf.get_height()
+            image.set_size_request(iw, ih)
+            try:
+                image.set_pixel_size(max(iw, ih))
+            except Exception:
+                pass
+            image.set_halign(Gtk.Align.CENTER)
+            image.set_valign(Gtk.Align.CENTER)
+            image.set_hexpand(True)
+            image.set_vexpand(True)
+
+            box = Gtk.Box()
+            box.set_size_request(ts, ts)
+            box.set_hexpand(False)
+            box.set_vexpand(False)
+            box.set_halign(Gtk.Align.CENTER)
+            box.set_valign(Gtk.Align.CENTER)
+            try:
+                box.set_overflow(Gtk.Overflow.HIDDEN)
+            except Exception:
+                pass
+            box.append(image)
+
+            if self.show_tooltips:
+                box.set_tooltip_text(self._make_tooltip(f))
+
+            left_click = Gtk.GestureClick.new()
+            left_click.set_button(1)
+            left_click.connect("pressed", self.on_left_click, f, file_type)
+            box.add_controller(left_click)
+
+            right_click = Gtk.GestureClick.new()
+            right_click.set_button(3)
+            right_click.connect("pressed", self.on_right_click, f, file_type)
+            box.add_controller(right_click)
+
+            middle_click = Gtk.GestureClick.new()
+            middle_click.set_button(2)
+            middle_click.connect("pressed", self.on_middle_click, f)
+            box.add_controller(middle_click)
+
+            if current_row is None or col_in_row >= cols:
+                current_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=GRID_SPACING)
+                current_row.set_halign(Gtk.Align.START)
+                current_row.set_hexpand(False)
+                current_row.set_size_request(row_w, ts)
+                self.grid_box.append(current_row)
+                col_in_row = 0
+
+            current_row.append(box)
+            col_in_row += 1
+
+            self.widget_map[f] = image
+            self.file_widgets[f] = (box, file_type)
+
+        if not self.thumb_queue.empty():
+            self.start_lazy_loading()
+
+    def create_placeholder(self):
+        pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8,
+                                      self.thumb_size, self.thumb_size)
+        color = (50, 50, 50)
+        pixbuf.fill((color[0]<<24) | (color[1]<<16) | (color[2]<<8) | 0xff)
+        return pixbuf
+
+    def start_lazy_loading(self):
+        items = []
+        while not self.thumb_queue.empty():
+            items.append(self.thumb_queue.get())
+        if not items:
+            return
+
+        def process_one(f):
+            pixbuf = self.generate_thumbnail(f)
+            if pixbuf and f in self.widget_map:
+                pixbuf = fit_pixbuf_contain(pixbuf, self.thumb_size)
+                texture = Gdk.Texture.new_for_pixbuf(pixbuf)
+                GLib.idle_add(self.widget_map[f].set_from_paintable, texture)
+
+        max_workers = min(8, max(2, os.cpu_count() or 4))
+
+        def worker():
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                list(executor.map(process_one, items))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def generate_thumbnail(self, path):
+        cache_file = get_cache_path(path, self.thumb_size, self.bg_color)
+        try:
+            if path.suffix.lower() in VIDEO_EXTS:
+                subprocess.run([
+                    "ffmpegthumbnailer",
+                    "-i", str(path),
+                    "-o", str(cache_file),
+                    "-s", str(self.thumb_size),
+                    "-q", "10",
+                    "-f"
+                ], check=True, capture_output=True)
+            elif HAVE_PIL:
+                with Image.open(path) as im:
+                    im = ImageOps.exif_transpose(im)
+                    im.thumbnail((self.thumb_size, self.thumb_size), Image.LANCZOS)
+                    if im.mode not in ("RGB", "RGBA"):
+                        im = im.convert("RGB")
+                    tmp = cache_file.with_suffix(".tmp.png")
+                    im.save(tmp, "PNG")
+                    tmp.replace(cache_file)
+            else:
+                subprocess.run([
+                    "convert",
+                    str(path),
+                    "-auto-orient",
+                    "-thumbnail", f"{self.thumb_size}x{self.thumb_size}",
+                    str(cache_file)
+                ], check=True, capture_output=True)
+            pb = GdkPixbuf.Pixbuf.new_from_file(str(cache_file))
+            return fit_pixbuf_contain(pb, self.thumb_size)
+        except Exception as e:
+            print(f"Chyba pri generovaní thumbnailu pre {path}: {e}")
+            return None
+
+    def apply_filter(self, filter_type):
+        self.current_filter = filter_type
+        self.load_folder(self.current_folder)
+
+    def open_folder_dialog(self):
+        dialog = Gtk.FileDialog.new()
+        dialog.set_title("Vyber adresár")
+        dialog.set_modal(True)
+        dialog.select_folder(None, None, self.on_folder_selected)
+
+    def on_folder_selected(self, dialog, result):
+        try:
+            folder = dialog.select_folder_finish(result)
+            if folder:
+                folder_path = Path(folder.get_path())
+                self.load_folder(folder_path)
+        except Exception as e:
+            print(f"Chyba pri výbere adresára: {e}")
+
+    def execute_command(self, cmd_num):
+        cmd_key = f'cmd{cmd_num}'
+        if cmd_key in self.config['Commands']:
+            cmd = self.config['Commands'][cmd_key]
+            if cmd:
+                cmd = cmd.replace('{folder}', str(self.current_folder))
+                cmd = os.path.expandvars(cmd)
+                subprocess.Popen(cmd, shell=True)
+
+    def open_file(self, path):
+        ext = path.suffix.lower()
+        if ext in IMAGE_EXTS:
+            opener = self.image_opener
+        elif ext in VIDEO_EXTS:
+            opener = self.video_opener
+        else:
+            return
+        if opener == 'default':
+            subprocess.Popen(["xdg-open", str(path)])
+        else:
+            subprocess.Popen([opener, str(path)])
+
+    def edit_file(self, path, file_type):
+        if file_type == 'image':
+            editor = self.image_editor
+        elif file_type == 'video':
+            editor = self.video_editor
+        else:
+            return
+        try:
+            subprocess.Popen([editor, str(path)])
+        except Exception as e:
+            print(f"Chyba pri spustení editora {editor}: {e}")
+
+    def trim_video(self, path):
+        try:
+            subprocess.Popen([self.video_trimmer, str(path)])
+        except Exception as e:
+            print(f"Chyba pri spustení strihača {self.video_trimmer}: {e}")
+
+    def copy_to_downloads(self, path):
+        try:
+            destination = self.download_folder / path.name
+            counter = 1
+            while destination.exists():
+                stem = path.stem
+                suffix = path.suffix
+                destination = self.download_folder / f"{stem}_{counter}{suffix}"
+                counter += 1
+            shutil.copy2(str(path), str(destination))
+            print(f"Skopírované: {path.name} -> {destination}")
+            self.show_toast(f"Skopírované: {destination.name}")
+        except Exception as e:
+            print(f"Chyba pri kopírovaní {path}: {e}")
+
+    def get_crop_ratio_for_image(self, image_path):
+        ratio = self.config.get('Crop', 'ratio', fallback='3:2').strip().lower()
+        orientation = self.config.get('Crop', 'orientation', fallback='automatic').strip().lower()
+        custom = self.config.get('Crop', 'custom_ratio', fallback='3:2').strip()
+
+        if ratio == 'custom':
+            base = custom if custom else '3:2'
+        else:
+            base = ratio
+
+        parsed = parse_ratio(base)
+        if parsed is None:
+            base = '3:2'
+            parsed = (3.0, 2.0)
+
+        w, h = parsed
+
+        try:
+            pb = GdkPixbuf.Pixbuf.new_from_file(str(image_path))
+            pb = pb.apply_embedded_orientation()
+            img_w, img_h = pb.get_width(), pb.get_height()
+            is_portrait = img_h > img_w
+        except Exception:
+            is_portrait = False
+
+        if orientation == 'portrait':
+            if w > h:
+                return f"{h}:{w}"
+            return base
+        elif orientation == 'landscape':
+            if h > w:
+                return f"{h}:{w}"
+            return base
+        else:
+            if is_portrait:
+                if w > h:
+                    return f"{h}:{w}"
+                return base
+            else:
+                if h > w:
+                    return f"{h}:{w}"
+                return base
+
+    def on_left_click(self, gesture, n_press, x, y, path, file_type):
+        event = gesture.get_current_event()
+        state = event.get_modifier_state()
+        if state & Gdk.ModifierType.CONTROL_MASK:
+            self.edit_file(path, file_type)
+        else:
+            self.open_file(path)
+
+    def on_right_click(self, gesture, n_press, x, y, path, file_type):
+        if file_type == 'image':
+            ratio = self.get_crop_ratio_for_image(path)
+            CropWindow(self, path, self.download_folder, ratio)
+        elif file_type == 'video':
+            self.trim_video(path)
+
+    def on_middle_click(self, gesture, n_press, x, y, path):
+        self.copy_to_downloads(path)
+
+    def get_actions(self):
+        return {
+            'quit': lambda: self.close(),
+            'open_folder': self.open_folder_dialog,
+            'filter_images': lambda: self.apply_filter('images'),
+            'filter_videos': lambda: self.apply_filter('videos'),
+            'filter_all': lambda: self.apply_filter('all'),
+            'command1': lambda: self.execute_command(1),
+            'command2': lambda: self.execute_command(2),
+            'command3': lambda: self.execute_command(3),
+            'settings': self.open_settings_dialog,
+        }
+
+    def on_key_press(self, controller, keyval, keycode, state):
+        shortcuts = self.config['Shortcuts']
+        relevant_mods = (Gdk.ModifierType.CONTROL_MASK |
+                        Gdk.ModifierType.ALT_MASK |
+                        Gdk.ModifierType.SHIFT_MASK)
+        state = state & relevant_mods
+        keyval = Gdk.keyval_to_lower(keyval)
+        for name, action in self.get_actions().items():
+            shortcut_str = shortcuts.get(name)
+            if not shortcut_str:
+                continue
+            key, mod = parse_shortcut(shortcut_str)
+            if key and keyval == key and state == mod:
+                action()
+                return True
+        return False
+
+    def open_settings_dialog(self):
+        try:
+            self.config = load_config()
+            dialog = SettingsDialog(self)
+            dialog.present()
+        except Exception as e:
+            print(f"Chyba pri otváraní nastavení: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def apply_settings_from_dialog(self):
+        self.config = load_config()
+        self.columns = int(self.config['Appearance']['columns'])
+        self.spacing = GRID_SPACING
+        self.margin = GRID_MARGIN
+        self.bg_color = self.config['Appearance']['background_color']
+        self.hide_scrollbar = True
+        self.show_tooltips = self.config.getboolean('Appearance', 'show_tooltips', fallback=True)
+        self.show_notifications = self.config.getboolean('Appearance', 'show_notifications', fallback=True)
+        self.image_opener = self.config['Openers']['image_opener']
+        self.video_opener = self.config['Openers']['video_opener']
+        self.image_editor = self.config.get('Editors', 'image_editor', fallback='gimp')
+        self.video_editor = self.config.get('Editors', 'video_editor', fallback='vlc')
+        self.video_trimmer = self.config.get('Editors', 'video_trimmer', fallback='gnome-video-trimmer')
+        download_folder = Path(os.path.expandvars(
+            self.config.get('Paths', 'download_folder', fallback=str(Path.home() / "Downloads"))
+        ))
+        self.download_folder = download_folder if download_folder.exists() else Path.home() / "Downloads"
+        self.download_folder.mkdir(exist_ok=True)
+        self._apply_css()
+        self._apply_grid_geometry()
+        self.load_folder(self.current_folder)
+
+class ShortcutRecorder(Gtk.Box):
+    def __init__(self, initial_value, on_change=None):
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.value = initial_value or ''
+        self.on_change = on_change
+        self.label = Gtk.Label(label=self.value or '(žiadna)')
+        self.label.set_xalign(1)
+        self.label.add_css_class("dim-label")
+        self.record_btn = Gtk.Button(label="Nahrať")
+        self.record_btn.add_css_class("flat")
+        self.record_btn.connect("clicked", self._start_recording)
+        self.append(self.label)
+        self.append(self.record_btn)
+        self._capture_controller = None
+
+    def get_value(self):
+        return self.value
+
+    def _start_recording(self, button):
+        if self._capture_controller is not None:
+            return
+        root = self.get_root()
+        if not root:
+            return
+        self.record_btn.set_label("Stlač klávesu…")
+        self.record_btn.set_sensitive(False)
+
+        controller = Gtk.EventControllerKey()
+        controller.connect("key-pressed", self._on_key_pressed)
+        controller.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        root.add_controller(controller)
+        self._capture_controller = controller
+
+    def _stop_recording(self):
+        root = self.get_root()
+        if root and self._capture_controller:
+            root.remove_controller(self._capture_controller)
+        self._capture_controller = None
+        self.record_btn.set_label("Nahrať")
+        self.record_btn.set_sensitive(True)
+
+    def _on_key_pressed(self, controller, keyval, keycode, state):
+        if keyval in MODIFIER_KEYVALS:
+            return True
+
+        relevant = state & (Gdk.ModifierType.CONTROL_MASK |
+                             Gdk.ModifierType.ALT_MASK |
+                             Gdk.ModifierType.SHIFT_MASK)
+        mods = []
+        if relevant & Gdk.ModifierType.CONTROL_MASK:
+            mods.append('ctrl')
+        if relevant & Gdk.ModifierType.ALT_MASK:
+            mods.append('alt')
+        if relevant & Gdk.ModifierType.SHIFT_MASK:
+            mods.append('shift')
+
+        lowered = Gdk.keyval_to_lower(keyval)
+        gdk_name = Gdk.keyval_name(lowered) or ''
+        key_str = KEYVAL_DISPLAY_NAMES.get(gdk_name, gdk_name.lower())
+
+        if key_str:
+            self.value = '+'.join([key_str] + mods)
+            self.label.set_label(self.value)
+            if self.on_change:
+                self.on_change(self.value)
+
+        self._stop_recording()
+        return True
+
+SECTION_TITLES = {
+    'Paths': 'Priečinky',
+    'Appearance': 'Vzhľad',
+    'Sorting': 'Zoradenie',
+    'Openers': 'Otváranie',
+    'Editors': 'Editory',
+    'Commands': 'Príkazy',
+    'Shortcuts': 'Klávesové skratky',
+    'Crop': 'Orezávanie',
+    'About': 'O programe',
+}
+
+SECTION_ICONS = {
+    'Paths': 'folder-symbolic',
+    'Appearance': 'preferences-desktop-appearance-symbolic',
+    'Sorting': 'view-sort-descending-symbolic',
+    'Openers': 'document-open-symbolic',
+    'Editors': 'document-edit-symbolic',
+    'Commands': 'utilities-terminal-symbolic',
+    'Shortcuts': 'input-keyboard-symbolic',
+    'Crop': 'image-crop-symbolic',
+    'About': 'help-about-symbolic',
+}
+
+class SettingsDialog(Adw.Window):
+    def __init__(self, main_window):
+        super().__init__()
+        self.set_transient_for(main_window)
+        self.set_modal(True)
+        self.set_default_size(920, 680)
+        self.set_title("Nastavenia – Galéria")
+        self.main_window = main_window
+        self.config = main_window.config
+        self._active_chooser = None
+        self._section_pages = {}
+        self._list_rows = {}
+
+        toolbar = Adw.ToolbarView()
+        self.set_content(toolbar)
+
+        header = Adw.HeaderBar()
+        header.set_title_widget(Adw.WindowTitle(title="Nastavenia", subtitle="Galéria"))
+        toolbar.add_top_bar(header)
+
+        self.split = Adw.NavigationSplitView()
+        self.split.set_min_sidebar_width(200)
+        self.split.set_max_sidebar_width(280)
+        self.split.set_sidebar_width_fraction(0.28)
+        toolbar.set_content(self.split)
+
+        sidebar_page = Adw.NavigationPage()
+        sidebar_page.set_title("Kategórie")
+        sidebar_page.set_tag("sidebar")
+
+        sidebar_toolbar = Adw.ToolbarView()
+        sidebar_header = Adw.HeaderBar()
+        sidebar_header.set_show_start_title_buttons(False)
+        sidebar_header.set_show_end_title_buttons(False)
+        sidebar_header.set_title_widget(Gtk.Label(label="Kategórie"))
+        sidebar_toolbar.add_top_bar(sidebar_header)
+
+        self.sidebar_list = Gtk.ListBox()
+        self.sidebar_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.sidebar_list.add_css_class("navigation-sidebar")
+        self.sidebar_list.connect("row-selected", self._on_sidebar_selected)
+
+        for section in FIELDS.keys():
+            title = SECTION_TITLES.get(section, section)
+            icon_name = SECTION_ICONS.get(section, "preferences-system-symbolic")
+
+            row = Gtk.ListBoxRow()
+            row.section_key = section
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            box.set_margin_start(12)
+            box.set_margin_end(12)
+            box.set_margin_top(10)
+            box.set_margin_bottom(10)
+
+            icon = Gtk.Image.new_from_icon_name(icon_name)
+            try:
+                icon.set_icon_size(Gtk.IconSize.NORMAL)
+            except Exception:
+                pass
+            box.append(icon)
+
+            label = Gtk.Label(label=title, xalign=0)
+            label.set_hexpand(True)
+            box.append(label)
+
+            row.set_child(box)
+            self.sidebar_list.append(row)
+            self._list_rows[section] = row
+
+        sidebar_scrolled = Gtk.ScrolledWindow()
+        sidebar_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        sidebar_scrolled.set_child(self.sidebar_list)
+        sidebar_toolbar.set_content(sidebar_scrolled)
+        sidebar_page.set_child(sidebar_toolbar)
+        self.split.set_sidebar(sidebar_page)
+
+        self.content_page = Adw.NavigationPage()
+        self.content_page.set_title(" ")
+        self.content_page.set_tag("content")
+
+        content_toolbar = Adw.ToolbarView()
+        self.content_header = Adw.HeaderBar()
+        self.content_header.set_show_start_title_buttons(False)
+        self.content_header.set_show_end_title_buttons(False)
+        self.content_title = Gtk.Label(label="")
+        self.content_header.set_title_widget(self.content_title)
+        content_toolbar.add_top_bar(self.content_header)
+
+        self.content_stack = Gtk.Stack()
+        self.content_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.content_stack.set_transition_duration(150)
+
+        for section, fields in FIELDS.items():
+            page_widget = self._build_section_page(section, fields)
+            self._section_pages[section] = page_widget
+            self.content_stack.add_named(page_widget, section)
+
+        content_toolbar.set_content(self.content_stack)
+        self.content_page.set_child(content_toolbar)
+        self.split.set_content(self.content_page)
+
+        first_section = next(iter(FIELDS.keys()))
+        self.sidebar_list.select_row(self._list_rows[first_section])
+
+        key = Gtk.EventControllerKey()
+        key.connect("key-pressed", self._on_key)
+        self.add_controller(key)
+
+    def _on_key(self, controller, keyval, keycode, state):
+        if Gdk.keyval_to_lower(keyval) == Gdk.KEY_Escape:
+            self.close()
+            return True
+        return False
+
+    def _on_sidebar_selected(self, listbox, row):
+        if row is None:
+            return
+        section = getattr(row, 'section_key', None) or row.get_name()
+        if section not in self._section_pages:
+            return
+        self.content_stack.set_visible_child_name(section)
+        self.content_title.set_label(SECTION_TITLES.get(section, section))
+        self.content_page.set_title(SECTION_TITLES.get(section, section))
+
+    def _build_section_page(self, section, fields):
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_vexpand(True)
+
+        clamp = Adw.Clamp()
+        clamp.set_maximum_size(700)
+        clamp.set_tightening_threshold(500)
+
+        group = Adw.PreferencesGroup()
+        group.set_margin_top(12)
+        group.set_margin_bottom(24)
+        group.set_margin_start(12)
+        group.set_margin_end(12)
+
+        for key, field_type, label_text in fields:
+            current_value = self.config.get(section, key, fallback='')
+            row = self._build_row(section, key, field_type, label_text, current_value)
+            group.add(row)
+
+        clamp.set_child(group)
+        scrolled.set_child(clamp)
+        return scrolled
+
+    def _save_field(self, section, key, value):
+        if section not in self.config:
+            self.config[section] = {}
+        self.config[section][key] = value
+        save_config(self.config)
+        self.main_window.apply_settings_from_dialog()
+
+    def _build_row(self, section, key, field_type, label_text, current_value):
+        if field_type == 'label':
+            row = Adw.ActionRow()
+            label = Gtk.Label(label=label_text, xalign=0, wrap=True)
+            label.set_margin_top(8)
+            label.set_margin_bottom(8)
+            row.set_child(label)
+            return row
+
+        if field_type == 'bool':
+            row = Adw.SwitchRow(title=label_text)
+            row.set_active(current_value.strip().lower() == 'true')
+            row.connect("notify::active", lambda r, p: self._save_field(
+                section, key, 'true' if r.get_active() else 'false'))
+            return row
+
+        if field_type == 'shortcut':
+            row = Adw.ActionRow(title=label_text)
+            recorder = ShortcutRecorder(
+                current_value,
+                on_change=lambda value: self._save_field(section, key, value))
+            recorder.set_valign(Gtk.Align.CENTER)
+            row.add_suffix(recorder)
+            return row
+
+        if field_type.startswith('int'):
+            parts = field_type.split(':')
+            min_v = int(parts[1]) if len(parts) > 1 else 0
+            max_v = int(parts[2]) if len(parts) > 2 else 100000
+            row = Adw.SpinRow.new_with_range(min_v, max_v, 1)
+            row.set_title(label_text)
+            try:
+                row.set_value(int(current_value))
+            except ValueError:
+                row.set_value(min_v)
+            row.connect("notify::value", lambda r, p: self._save_field(
+                section, key, str(int(r.get_value()))))
+            return row
+
+        if field_type == 'color':
+            row = Adw.ActionRow(title=label_text)
+            rgba = Gdk.RGBA()
+            if not rgba.parse(current_value or '#000000'):
+                rgba.parse('#000000')
+            color_dialog = Gtk.ColorDialog()
+            color_dialog.set_with_alpha(True)
+            btn = Gtk.ColorDialogButton(dialog=color_dialog, rgba=rgba)
+            btn.set_valign(Gtk.Align.CENTER)
+            btn.connect("notify::rgba", lambda b, p: self._save_field(
+                section, key, rgba_to_hex(b.get_rgba())))
+            row.add_suffix(btn)
+            return row
+
+        if field_type == 'folder':
+            row = Adw.EntryRow(title=label_text)
+            row.set_text(current_value)
+            row.connect("notify::text", lambda r, p: self._save_field(section, key, r.get_text().strip()))
+            btn = Gtk.Button(icon_name="folder-open-symbolic", valign=Gtk.Align.CENTER)
+            btn.add_css_class("flat")
+            btn.set_tooltip_text("Vybrať priečinok…")
+            btn.connect("clicked", lambda b: self._browse_folder(row, section, key))
+            row.add_suffix(btn)
+            return row
+
+        if field_type.startswith('combo:'):
+            options = [o.strip() for o in field_type.split(':', 1)[1].split(',')]
+            row = Adw.ComboRow(title=label_text, model=Gtk.StringList.new(options))
+            try:
+                row.set_selected(options.index(current_value.strip()))
+            except ValueError:
+                row.set_selected(0)
+            row.connect("notify::selected", lambda r, p: self._save_field(
+                section, key, options[r.get_selected()]))
+            return row
+
+        row = Adw.EntryRow(title=label_text)
+        row.set_text(current_value)
+        row.connect("notify::text", lambda r, p: self._save_field(section, key, r.get_text().strip()))
+        return row
+
+    def _browse_folder(self, row, section, key):
+        chooser = Gtk.FileChooserNative.new(
+            "Vyber priečinok", self, Gtk.FileChooserAction.SELECT_FOLDER, "Vybrať", "Zrušiť")
+        chooser.connect("response", self._on_folder_chosen, row, section, key)
+        self._active_chooser = chooser
+        chooser.show()
+
+    def _on_folder_chosen(self, chooser, response, row, section, key):
+        if response == Gtk.ResponseType.ACCEPT:
+            gfile = chooser.get_file()
+            if gfile and gfile.get_path():
+                row.set_text(gfile.get_path())
+                self._save_field(section, key, gfile.get_path())
+        self._active_chooser = None
+
+class PreviewApp(Adw.Application):
+    def __init__(self, initial_folder=None):
+        super().__init__(application_id="org.example.Galeria")
+        self.initial_folder = initial_folder
+
+    def do_activate(self):
+        Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+        win = PreviewWindow(self, initial_folder=self.initial_folder)
+        win.present()
+
+if __name__ == "__main__":
+    initial_folder = resolve_initial_folder(sys.argv[1]) if len(sys.argv) > 1 else None
+    app = PreviewApp(initial_folder=initial_folder)
+    app.run(None)

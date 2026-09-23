@@ -1,0 +1,237 @@
+            /* - Globalne farby - */
+            window, .view, scrolledwindow > viewport {
+                background-color: #f2f2f2;
+                color: #1a1a1a;
+            }
+
+            /* - Header bar - */
+            headerbar {
+                background-color: #e0e0e0;
+                color: #1a1a1a;
+                border-bottom: 1px solid #c0c0c0;
+                min-height: 42px;
+                padding: 2px 6px;
+            }
+            headerbar button, headerbar togglebutton {
+                background-color: #d0d0d0;
+                border: 1px solid #b0b0b0;
+                color: #1a1a1a;
+                border-radius: 6px;
+                padding: 3px 7px;
+                min-height: 24px;
+            }
+            headerbar button:hover, headerbar togglebutton:hover {
+                background-color: #c4c4c4;
+                color: #000000;
+            }
+            headerbar button:active,
+            headerbar togglebutton:checked {
+                background-color: #b8b8b8;
+                color: #000000;
+                border-color: #909090;
+            }
+            headerbar button:disabled {
+                opacity: 0.35;
+            }
+            headerbar .linked button,
+            headerbar .linked togglebutton {
+                border-radius: 0;
+            }
+            headerbar .linked button:first-child,
+            headerbar .linked togglebutton:first-child {
+                border-radius: 6px 0 0 6px;
+            }
+            headerbar .linked button:last-child,
+            headerbar .linked togglebutton:last-child {
+                border-radius: 0 6px 6px 0;
+            }
+
+            /* - Lavy panel - */
+            .navigation-sidebar {
+                background-color: #e8e8e8;
+                color: #1a1a1a;
+            }
+            .navigation-sidebar row {
+                border-radius: 6px;
+                padding: 1px 4px;
+            }
+            .navigation-sidebar row:selected {
+                background-color: #c8d8f0;
+                color: #000000;
+            }
+            .navigation-sidebar row:hover:not(:selected) {
+                background-color: #dcdcdc;
+            }
+
+            .left-tab-btn {
+                border: 1px solid #b0b0b0;
+                color: #444444;
+                font-size: 0.95em;
+                font-weight: normal;
+                padding: 4px 2px;
+                border-radius: 0;
+            }
+            .left-tab-btn:first-child { border-radius: 6px 0 0 6px; }
+            .left-tab-btn:last-child  { border-radius: 0 6px 6px 0; }
+            .left-tab-btn:hover {
+                background-color: #d0d0d0;
+                color: #000000;
+            }
+            .left-tab-btn:checked {
+                background-color: #c8d8f0;
+                color: #000000;
+                font-weight: bold;
+            }
+
+            paned > separator {
+                background-color: #c0c0c0;
+                min-width: 1px;
+            }
+            separator {
+                background-color: #cccccc;
+                min-height: 1px;
+            }
+
+            /* - Obsah - verse - */
+            .verse-number {
+                color: #1a5fcc;
+                font-weight: bold;
+                font-size: 0.80em;
+                min-width: 28px;
+            }
+            .verse-text {
+                font-size: 1.1em;
+                line-height: 1.65;
+                color: #1a1a1a;
+            }
+            /* Ježišove slová (<J>...</J>) – farba je nastavená
+               priamo v Pango markup funkciou verse_text_to_pango() v bibliam.py */
+            .section-title {
+                font-weight: bold;
+                font-style: italic;
+                margin-top: 14px;
+                margin-bottom: 2px;
+                color: #7a5800;
+                font-size: 1.2em;
+            }
+
+            .title-2 {
+                color: #1a5fcc;
+            }
+
+            .verse-highlight {
+                background-color: alpha(#000000, 0.06);
+                border-radius: 6px;
+            }
+            .verse-highlight-comm {
+                background-color: alpha(#26a269, 0.12);
+                border-radius: 6px;
+            }
+
+            /* - Tlacidla pri versoch - */
+            .comm-btn {
+                padding: 0px;
+                min-width: 18px;
+                min-height: 18px;
+                border-radius: 9px;
+                color: #0088aa;
+                opacity: 0.55;
+            }
+            .comm-btn:hover { opacity: 1.0; }
+            .comm-btn-active {
+                color: #1a8a50;
+                opacity: 1.0;
+            }
+            .bookmark-btn {
+                padding: 0px;
+                min-width: 18px;
+                min-height: 18px;
+                border-radius: 9px;
+                opacity: 0.40;
+            }
+            .bookmark-btn:hover { opacity: 1.0; }
+            .bookmark-btn-on {
+                color: #cc8800;
+                opacity: 0.9;
+            }
+            .note-btn {
+                padding: 0px;
+                min-width: 18px;
+                min-height: 18px;
+                border-radius: 9px;
+                opacity: 0.40;
+            }
+            .note-btn:hover { opacity: 1.0; }
+            .note-btn-on {
+                color: #cc0055;
+                opacity: 0.9;
+            }
+
+            /* - Komentarovy panel - */
+            .comm-panel {
+                background-color: #e8e8e8;
+                border-top: 1px solid #c0c0c0;
+            }
+            .comm-text {
+                font-size: 0.97em;
+                line-height: 1.65;
+                color: #2a2a2a;
+            }
+            .comm-text a {
+                color: #1a5fcc;
+                text-decoration: none;
+            }
+            .comm-text a:hover { text-decoration: underline; }
+
+            .bookmarks-list image.bookmark-btn-on { color: #b87800; }
+            .bookmarks-list image.note-btn-on     { color: #5050b0; }
+
+            /* - Slovnik - */
+            .dict-topic-lbl { font-weight: bold; color: #1a1a1a; }
+            .dict-text {
+                font-size: 1.1em;
+                line-height: 1.6;
+                color: #1a1a1a;
+            }
+            .dict-text a       { color: #1a5fcc; text-decoration: none; }
+            .dict-text a:hover { text-decoration: underline; }
+            .dict-placeholder  { color: alpha(#000000, 0.75); }
+
+            .note-expand-btn { padding: 0px 2px; min-height: 18px; opacity: 0.75; }
+            .note-expand-btn:hover { opacity: 1.0; }
+
+            .caption { color: alpha(#000000, 0.50); }
+
+            /* - Vyhladavanie - */
+            .search-bar, .search-bar > revealer > box {
+                background-color: #e0e0e0;
+                border-bottom: 1px solid #c0c0c0;
+            }
+            entry {
+                background-color: #ffffff;
+                color: #1a1a1a;
+                border: 1px solid #b0b0b0;
+                border-radius: 6px;
+            }
+            entry:focus {
+                border-color: #1a5fcc;
+            }
+            dropdown, combobox {
+                background-color: #ffffff;
+                color: #1a1a1a;
+                border: 1px solid #b0b0b0;
+                border-radius: 6px;
+            }
+
+            /* - Farby skratiek kníh v ľavom paneli - */
+            .book-pentateuch { color: #8a6800; font-weight: bold; }
+            .book-historical  { color: #1a6aaa; font-weight: bold; }
+            .book-wisdom      { color: #1a7a30; font-weight: bold; }
+            .book-prophets    { color: #aa2070; font-weight: bold; }
+            .book-maccabees   { color: #aa6000; font-weight: bold; }
+            .book-gospels     { color: #5a30cc; font-weight: bold; }
+            .book-acts        { color: #8a6800; font-weight: bold; }
+            .book-paul        { color: #1a6aaa; font-weight: bold; }
+            .book-catholic    { color: #1a7a30; font-weight: bold; }
+            .book-revelation  { color: #cc2020; font-weight: bold; }
+            .book-default     { color: #1a1a1a; font-weight: bold; }

@@ -1,0 +1,231 @@
+            /* - Globalne farby - */
+            window, .view, scrolledwindow > viewport {
+                background-color: #111418;
+                color: #dce6f0;
+            }
+
+            /* - Header bar - */
+            headerbar {
+                background-color: #161b22;
+                color: #dce6f0;
+                border-bottom: 1px solid #2a3a4a;
+                min-height: 42px;
+                padding: 2px 6px;
+            }
+            headerbar button, headerbar togglebutton {
+                background-color: #1e2a36;
+                border: 1px solid #2a3a4a;
+                color: #b0c4d8;
+                border-radius: 5px;
+                padding: 3px 7px;
+                min-height: 24px;
+            }
+            headerbar button:hover, headerbar togglebutton:hover {
+                background-color: #253242;
+                color: #dce6f0;
+            }
+            headerbar button:active,
+            headerbar togglebutton:checked {
+                background-color: #2a3d50;
+                color: #60c8a0;
+                border-color: #3a5568;
+            }
+            headerbar button:disabled {
+                opacity: 0.35;
+            }
+            /* Linked skupiny v headeri */
+            headerbar .linked button,
+            headerbar .linked togglebutton {
+                border-radius: 0;
+            }
+            headerbar .linked button:first-child,
+            headerbar .linked togglebutton:first-child {
+                border-radius: 5px 0 0 5px;
+            }
+            headerbar .linked button:last-child,
+            headerbar .linked togglebutton:last-child {
+                border-radius: 0 5px 5px 0;
+            }
+
+            /* - Lavy panel - */
+            .navigation-sidebar {
+                background-color: #151a22;
+                color: #b0c4d8;
+            }
+            .navigation-sidebar row {
+                border-radius: 0;
+                padding: 1px 0;
+            }
+            .navigation-sidebar row:selected {
+                background-color: #1e3045;
+                color: #dce6f0;
+            }
+            .navigation-sidebar row:hover:not(:selected) {
+                background-color: #1a2430;
+            }
+
+            /* Tab tlacidla laveho panela */
+            .left-tab-btn {
+                background-color: #1a2230;
+                border: 1px solid #2a3a4a;
+                color: #8aa8c0;
+                font-size: 0.95em;
+                font-weight: normal;
+                padding: 4px 2px;
+                border-radius: 0;
+            }
+            .left-tab-btn:first-child { border-radius: 5px 0 0 5px; }
+            .left-tab-btn:last-child  { border-radius: 0 5px 5px 0; }
+            .left-tab-btn:hover {
+                background-color: #1e2a36;
+                color: #dce6f0;
+            }
+            .left-tab-btn:checked {
+                background-color: #1e3045;
+                color: #60c8a0;
+                font-weight: bold;
+            }
+
+            /* Separator medzi panelmi */
+            paned > separator {
+                background-color: #2a3a4a;
+                min-width: 1px;
+            }
+            separator {
+                background-color: #2a3a4a;
+                min-height: 1px;
+            }
+
+            /* - Obsah - verse - */
+            .verse-number {
+                color: #40b888;
+                font-weight: bold;
+                font-size: 0.80em;
+                min-width: 28px;
+            }
+            .verse-text {
+                font-size: 1.1em;
+                line-height: 1.65;
+                color: #ccd8e8;
+            }
+            .section-title {
+                font-weight: bold;
+                font-style: italic;
+                margin-top: 14px;
+                margin-bottom: 2px;
+                color: #60c8a0;
+                font-size: 1.2em;
+            }
+
+            /* Titulok knihy */
+            .title-2 {
+                color: #70d0b0;
+            }
+
+            /* Zvyraznenie versa */
+            .verse-highlight {
+                background-color: alpha(#60c8a0, 0.12);
+                border-radius: 4px;
+            }
+            .verse-highlight-comm {
+                background-color: alpha(#40b888, 0.15);
+                border-radius: 4px;
+            }
+
+            /* - Tlacidla pri versoch - */
+            .comm-btn {
+                padding: 0px;
+                min-width: 18px;
+                min-height: 18px;
+                border-radius: 9px;
+                color: #40b888;
+                opacity: 0.55;
+            }
+            .comm-btn:hover { opacity: 1.0; }
+            .comm-btn-active {
+                color: #70d0b0;
+                opacity: 1.0;
+            }
+            .bookmark-btn {
+                padding: 0px;
+                min-width: 18px;
+                min-height: 18px;
+                border-radius: 9px;
+                opacity: 0.35;
+            }
+            .bookmark-btn:hover { opacity: 1.0; }
+            .bookmark-btn-on {
+                color: #e8a030;
+                opacity: 0.9;
+            }
+            .note-btn {
+                padding: 0px;
+                min-width: 18px;
+                min-height: 18px;
+                border-radius: 9px;
+                opacity: 0.35;
+            }
+            .note-btn:hover { opacity: 1.0; }
+            .note-btn-on {
+                color: #5090d8;
+                opacity: 0.9;
+            }
+
+            /* - Komentarovy panel - */
+            .comm-panel {
+                background-color: #151a22;
+                border-top: 1px solid #2a3a4a;
+            }
+            .comm-text {
+                font-size: 0.97em;
+                line-height: 1.65;
+                color: #b0c4d8;
+            }
+            .comm-text a {
+                color: #40b888;
+                text-decoration: none;
+            }
+            .comm-text a:hover { text-decoration: underline; }
+
+            /* - Zalozky - */
+            .bookmarks-list image.bookmark-btn-on { color: #e8a030; }
+            .bookmarks-list image.note-btn-on     { color: #5090d8; }
+
+            /* - Slovnik - */
+            .dict-topic-lbl { font-weight: bold; color: #70d0b0; }
+            .dict-text {
+                font-size: 1.1em;
+                line-height: 1.6;
+                color: #ccd8e8;
+            }
+            .dict-text a       { color: #40b888; text-decoration: none; }
+            .dict-text a:hover { text-decoration: underline; }
+            .dict-placeholder  { color: alpha(#dce6f0, 0.40); }
+
+            /* - Poznamky - */
+            .note-expand-btn { padding: 0px 2px; min-height: 18px; opacity: 0.75; }
+            .note-expand-btn:hover { opacity: 1.0; }
+
+            /* - Caption / info label - */
+            .caption { color: alpha(#dce6f0, 0.50); }
+
+            /* - Vyhladavanie - */
+            .search-bar, .search-bar > revealer > box {
+                background-color: #161b22;
+                border-bottom: 1px solid #2a3a4a;
+            }
+            entry {
+                background-color: #1e2a36;
+                color: #dce6f0;
+                border: 1px solid #2a3a4a;
+                border-radius: 5px;
+            }
+            entry:focus {
+                border-color: #40b888;
+            }
+            dropdown, combobox {
+                background-color: #1e2a36;
+                color: #dce6f0;
+                border: 1px solid #2a3a4a;
+                border-radius: 5px;
+            }

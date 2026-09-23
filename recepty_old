@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+import json
+import tkinter as tk
+from tkinter import font, ttk
+
+JSON_FILE = "/home/mm/Dokumenty/recepty.json"
+
+# --- Moderná tmavá téma ---
+BG = "#1a1a1a"          # tmavšie pozadie
+BG2 = "#2d2d2d"         # svetlejšie panely
+BG3 = "#252525"         # listbox pozadie
+FG = "#e8e8e8"          # svetlý text
+FG_DIM = "#a0a0a0"      # tlmený text
+ACCENT = "#0d7377"      # moderný tyrkysový akcent
+ACCENT_HOVER = "#14a085" # svetlejší pri hover
+SELECTED = "#1a4d4d"    # vybraná položka
+
+# --- Načítanie JSON ---
+with open(JSON_FILE, "r", encoding="utf-8") as f:
+    data = json.load(f)["activeNotes"]
+
+# --- Vytvorenie mapy kategórií ---
+categories = {}
+for note in data:
+    tag = note["tags"][0] if note["tags"] else "Nezaradené"
+    categories.setdefault(tag, []).append(note)
+
+# --- Hlavné okno ---
+root = tk.Tk()
+root.title("Recepty")
+root.geometry("1200x750")
+root.configure(bg=BG)
+
+# Minimálna veľkosť okna
+root.minsize(900, 600)
+
+# --- Fonty ---
+title_font = font.Font(family="Segoe UI", size=17, weight="bold")
+default_font = font.Font(family="Segoe UI", size=13)
+button_font = font.Font(family="Segoe UI", size=12)
+recipe_font = font.Font(family="Segoe UI", size=13)
+
+# --- Funkcie ---
+def normalize_text(s):
+    return s.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+def pad_listbox_text(s):
+    return "  " + normalize_text(s)
+
+def update_recipe_list(*_):
+    listbox.delete(0, tk.END)
+    term = search_var.get().lower()
+    count = 0
+    for note in current_notes:
+        first_line = note["content"].split("\n", 1)[0]
+        first_line = normalize_text(first_line)
+        if term in first_line.lower() or term in note["id"].lower():
+            listbox.insert(tk.END, pad_listbox_text(first_line))
+            count += 1
+    
+    # Aktualizácia počítadla
+    counter_label.config(text=f"{count} receptov")
+
+def change_category(cat, button):
+    global current_notes, active_button
+    current_notes = categories[cat]
+    update_recipe_list()
+    
+    # Vizuálne označenie aktívneho tlačidla
+    if active_button:
+        active_button.config(bg=BG2, fg=FG)
+    button.config(bg=ACCENT, fg="white")
+    active_button = button
+    
+    # Vymazanie textu pri zmene kategórie
+    text.delete("1.0", tk.END)
+    text.insert("1.0", "Vyberte recept zo zoznamu", "placeholder")
+
+def show_recipe(event):
+    idx = listbox.curselection()
+    if not idx:
+        return
+    title = listbox.get(idx[0]).strip()
+    for note in current_notes:
+        first_line = normalize_text(note["content"].split("\n", 1)[0])
+        if first_line == title:
+            content = normalize_text(note["content"])
+            text.delete("1.0", tk.END)
+            text.insert(tk.END, content)
+            
+            # Zvýraznenie nadpisu
+            text.tag_add("heading", "1.0", "1.end")
+            text.tag_config("heading", font=title_font, foreground=ACCENT)
+            break
+
+# --- Hlavný rám ---
+main_frame = tk.Frame(root, bg=BG)
+main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+# --- Ľavý panel ---
+left_panel = tk.Frame(main_frame, bg=BG2, width=350)
+left_panel.pack(side="left", fill="both", padx=(0, 15))
+left_panel.pack_propagate(False)
+
+# Vnútorný padding
+left_inner = tk.Frame(left_panel, bg=BG2)
+left_inner.pack(fill="both", expand=True, padx=15, pady=15)
+
+# Kategórie
+cat_label = tk.Label(
+    left_inner,
+    text="KATEGÓRIE",
+    font=button_font,
+    bg=BG2,
+    fg=FG_DIM,
+    anchor="w"
+)
+cat_label.pack(fill="x", pady=(0, 10))
+
+# Frame pre tlačidlá kategórií v mriežke 2x2
+category_container = tk.Frame(left_inner, bg=BG2)
+category_container.pack(fill="x", pady=(0, 15))
+
+active_button = None
+category_buttons = []
+
+sorted_cats = sorted(categories.keys())
+row = 0
+col = 0
+
+for i, cat in enumerate(sorted_cats):
+    b = tk.Button(
+        category_container,
+        text=cat.replace("_", " "),
+        command=lambda c=cat, btn=None: None,
+        bg=BG2,
+        fg=FG,
+        activebackground=ACCENT,
+        activeforeground="white",
+        font=button_font,
+        relief="flat",
+        bd=0,
+        padx=10,
+        pady=8,
+        cursor="hand2"
+    )
+    # Lambda musí byť definovaná až keď existuje tlačidlo
+    b.config(command=lambda c=cat, btn=b: change_category(c, btn))
+    b.grid(row=row, column=col, sticky="ew", padx=2, pady=2)
+    category_buttons.append(b)
+    
+    col += 1
+    if col >= 2:  # Dve stĺpce
+        col = 0
+        row += 1
+
+# Nastavenie rovnakej šírky pre stĺpce
+category_container.grid_columnconfigure(0, weight=1)
+category_container.grid_columnconfigure(1, weight=1)
+
+# Vyhľadávanie
+search_label = tk.Label(
+    left_inner,
+    text="VYHĽADÁVANIE",
+    font=button_font,
+    bg=BG2,
+    fg=FG_DIM,
+    anchor="w"
+)
+search_label.pack(fill="x", pady=(10, 5))
+
+search_var = tk.StringVar()
+search_frame = tk.Frame(left_inner, bg=BG3, highlightbackground=ACCENT, highlightthickness=1)
+search_frame.pack(fill="x", pady=(0, 5))
+
+search_entry = tk.Entry(
+    search_frame,
+    textvariable=search_var,
+    font=default_font,
+    bg=BG3,
+    fg=FG,
+    insertbackground=ACCENT,
+    relief="flat",
+    bd=5
+)
+search_entry.pack(fill="x")
+search_var.trace_add("write", update_recipe_list)
+
+# Počítadlo receptov
+counter_label = tk.Label(
+    left_inner,
+    text="0 receptov",
+    font=button_font,
+    bg=BG2,
+    fg=FG_DIM,
+    anchor="w"
+)
+counter_label.pack(fill="x", pady=(5, 5))
+
+# Listbox s rámom
+listbox_frame = tk.Frame(left_inner, bg=BG3, highlightbackground=ACCENT, highlightthickness=1)
+listbox_frame.pack(fill="both", expand=True)
+
+listbox = tk.Listbox(
+    listbox_frame,
+    bg=BG3,
+    fg=FG,
+    font=default_font,
+    selectbackground=SELECTED,
+    selectforeground=FG,
+    highlightthickness=0,
+    bd=0,
+    exportselection=False,
+    activestyle="none"
+)
+listbox.pack(fill="both", expand=True, padx=1, pady=1)
+
+# Scrollbar pre listbox
+scrollbar = tk.Scrollbar(listbox_frame, command=listbox.yview)
+listbox.config(yscrollcommand=scrollbar.set)
+
+listbox.bind("<<ListboxSelect>>", show_recipe)
+
+# --- Pravý panel pre recept ---
+right_panel = tk.Frame(main_frame, bg=BG2)
+right_panel.pack(side="right", fill="both", expand=True)
+
+# Vnútorný padding
+right_inner = tk.Frame(right_panel, bg=BG2)
+right_inner.pack(fill="both", expand=True, padx=20, pady=20)
+
+# Text widget s rámom
+text_frame = tk.Frame(right_inner, bg=BG3, highlightbackground=ACCENT, highlightthickness=1)
+text_frame.pack(fill="both", expand=True)
+
+text = tk.Text(
+    text_frame,
+    bg=BG3,
+    fg=FG,
+    font=recipe_font,
+    wrap="word",
+    padx=15,
+    pady=15,
+    highlightthickness=0,
+    bd=0,
+    spacing1=3,
+    spacing3=3
+)
+text.pack(fill="both", expand=True)
+
+# Scrollbar pre text
+text_scroll = tk.Scrollbar(text_frame, command=text.yview)
+text.config(yscrollcommand=text_scroll.set)
+
+# Placeholder text
+text.insert("1.0", "Vyberte recept zo zoznamu", "placeholder")
+text.tag_config("placeholder", foreground=FG_DIM, font=default_font)
+
+# --- Inicializácia ---
+default_category = "Hlavné_jedlo"
+if default_category in categories:
+    default_button = category_buttons[sorted(categories.keys()).index(default_category)]
+    change_category(default_category, default_button)
+else:
+    first_cat = sorted(categories.keys())[0]
+    change_category(first_cat, category_buttons[0])
+
+root.mainloop()

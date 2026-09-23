@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Simplenote Token Grabber",
+  "version": "1.0",
+  "description": "Zachytí Simperium access token pri prihlásení na app.simplenote.com (na použitie vo vlastnom Simplenote klientovi).",
+  "permissions": ["storage"],
+  "host_permissions": ["https://app.simplenote.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://app.simplenote.com/*"],
+      "js": ["inject.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://app.simplenote.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Simplenote Token"
+  }
+}
