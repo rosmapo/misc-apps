@@ -36,10 +36,8 @@ def get_trash_paths():
             os.path.join(mount_path, ".Trash")
         ]
         for c in candidates:
-            # Použitie os.path.isdir namiesto os.path.exists pre kontrolu "files"
             if os.path.isdir(c):
                 files_check = os.path.join(c, "files")
-                # os.path.isdir vráti False pre neplatné symlinky, ale adresár môže existovať
                 if os.path.isdir(files_check) or os.path.lexists(files_check):
                     paths.append(c)
                 
@@ -143,7 +141,6 @@ class TrashApp(Adw.ApplicationWindow):
         center_box.append(self.btn_restore)
 
         self.btn_empty = Gtk.Button(label="Vyprázdniť kôš")
-        # Odstránená CSS trieda "destructive-action", ktorá spôsobovala problémy
         self.btn_empty.connect("clicked", self.on_empty_clicked)
         center_box.append(self.btn_empty)
         
@@ -182,6 +179,9 @@ class TrashApp(Adw.ApplicationWindow):
 
     def setup_css(self):
         css = """
+        @define-color dialog_bg_color @window_bg_color;
+        @define-color dialog_fg_color @window_fg_color;
+
         window {
             border-radius: 18px;
         }
@@ -235,8 +235,6 @@ class TrashApp(Adw.ApplicationWindow):
                     data_filename = filename[:-10]
                     data_path = os.path.join(files_dir, data_filename)
                     
-                    # KRITICKÁ ZMENA: Použitie os.path.lexists namiesto os.path.exists
-                    # os.path.lexists vráti True aj pre neplatné symlinky
                     if os.path.lexists(data_path):
                         item = TrashItem(root, filename)
                         all_items.append(item)
@@ -259,10 +257,8 @@ class TrashApp(Adw.ApplicationWindow):
     def update_buttons_state(self):
         n_items = self.store.get_n_items()
         
-        # Tlačidlo VYPRÁZDNIŤ: Aktívne ak je aspoň 1 položka
         self.btn_empty.set_sensitive(n_items > 0)
 
-        # Tlačidlo OBNOVIŤ: Aktívne ak je OZNAČENÁ aspoň 1 položka
         selection = self.selection_model.get_selection()
         has_selection = not selection.is_empty()
         self.btn_restore.set_sensitive(has_selection)
@@ -284,7 +280,6 @@ class TrashApp(Adw.ApplicationWindow):
                 dst = item.original_path
                 info = item.info_file_path
                 
-                # Kontrola existencie pomocou lexists (funguje aj pre neplatné symlinky)
                 if not os.path.lexists(src): 
                     continue
 
@@ -310,6 +305,7 @@ class TrashApp(Adw.ApplicationWindow):
         if n_items == 0:
             return
             
+        # Adw.AlertDialog sa kreslí priamo v okne, takže preberá jeho tému
         dialog = Adw.AlertDialog.new(
             "Vyprázdniť kôš",
             "Naozaj chcete vyprázdniť kôš? Položky budú trvalo zmazané."
@@ -317,11 +313,12 @@ class TrashApp(Adw.ApplicationWindow):
         dialog.add_response("cancel", "Zrušiť")
         dialog.add_response("empty", "Vyprázdniť")
         dialog.set_response_appearance("empty", Adw.ResponseAppearance.DESTRUCTIVE)
-        dialog.connect("response", self.on_empty_dialog_response)
-        dialog.present(self)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.choose(self, None, self.on_empty_dialog_response)
 
-    def on_empty_dialog_response(self, dialog, response):
-        if response == "empty":
+    def on_empty_dialog_response(self, dialog, result):
+        if dialog.choose_finish(result) == "empty":
             self.perform_empty()
 
     def perform_empty(self):
@@ -330,9 +327,7 @@ class TrashApp(Adw.ApplicationWindow):
         
         for item in items:
             try:
-                # KRITICKÁ ZMENA: Použitie os.path.lexists namiesto os.path.exists
                 if os.path.lexists(item.data_file_path):
-                    # Pre symlinky (aj neplatné) použijeme os.unlink
                     if os.path.islink(item.data_file_path):
                         os.unlink(item.data_file_path)
                     elif os.path.isdir(item.data_file_path):
