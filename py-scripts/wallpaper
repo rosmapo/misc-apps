@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
@@ -150,22 +151,107 @@ def list_wallpapers(wallpaper_dir):
     )
 
 
-def apply_wallpaper(img_path, remember=True):
-    """Reštart swaybg s novým obrázkom (bez Matugenu).
+# Prechod pri zmene pozadia. Pri obnovení po štarte (-p) sa nepoužije.
+AWWW_TRANSITION = [
+    "--transition-type", "fade",     # alebo fade, wipe, center, any, random...
+    "--transition-duration", "1",    # sekundy
+]
+
+
+def awww_running():
+    """True, ak daemon odpovedá (awww query uspeje)."""
+
+    try:
+        r = subprocess.run(
+            ["awww", "query"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+    return r.returncode == 0
+
+
+def ensure_awww_daemon(timeout=5.0):
+    """Zabezpečí bežiaci awww-daemon a počká, kým je pripravený.
+
+    Vracia (ok, čerstvý): čerstvý = daemon sme práve spustili my.
+
+    Daemon sa spúšťa vždy s --no-cache: pozadie si pamätáme sami
+    (current), takže nechceme, aby po štarte sám zobrazil obrázok zo
+    svojej cache (napr. z náhľadu -v). Po pripojení nového monitora za
+    behu treba spustiť wallpaper znova.
+
+    Ak už beží (napr. z autostartu), nespustí druhý. Ak sa dva štarty
+    stretnú, druhý daemon sa sám ukončí (beží len jeden) a tu sa počká
+    na ten, ktorý vyhral.
+    """
+
+    if awww_running():
+        return True, False
+
+    try:
+        subprocess.Popen(
+            ["awww-daemon", "--no-cache"],
+            start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return False, False
+
+    deadline = time.monotonic() + timeout
+
+    while time.monotonic() < deadline:
+        time.sleep(0.1)
+
+        if awww_running():
+            return True, True
+
+    return False, False
+
+
+def apply_wallpaper(img_path, remember=True, transition=True):
+    """Nastaví pozadie cez awww (bez Matugenu).
 
     remember=True: pozadie sa zapamätá ako trvalé (current) a farby už
     nie sú "z náhľadu". remember=False: iba dočasný náhľad.
+    transition=False: pozadie naskočí okamžite (štart systému).
+    Prechod sa preskočí aj vtedy, ak sme daemon práve spustili.
     """
 
-    subprocess.run(["pkill", "swaybg"], check=False)
+    ok, fresh = ensure_awww_daemon()
 
-    subprocess.Popen(
-        ["swaybg", "-i", str(img_path), "-m", "fill"],
-        start_new_session=True,
+    if not ok:
+        raise RuntimeError(
+            "awww-daemon sa nespustil (je awww nainštalovaný?)"
+        )
+
+    if fresh:
+        transition = False
+
+    # --resize crop ≈ swaybg -m fill (vyplní obrazovku, oreže prebytok)
+    r = subprocess.run(
+        [
+            "awww", "img",
+            str(img_path),
+            "--resize", "crop",
+            *(AWWW_TRANSITION if transition
+              else ["--transition-type", "none"]),
+        ],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True
     )
+
+    if r.returncode != 0:
+        raise RuntimeError(f"Proces awww zlyhal: {r.stderr.strip()}")
 
     if remember:
         write_current_wallpaper(img_path)
@@ -301,7 +387,7 @@ def cli_permanent():
         restore_colors = preview_marker_active() and detect_matugen_active()
 
         try:
-            apply_wallpaper(current)
+            apply_wallpaper(current, transition=False)
         except Exception as e:
             return cli_fail(f"Chyba pri nastavovaní pozadia: {e}")
 
@@ -702,6 +788,8 @@ class WallpaperWindow(Adw.ApplicationWindow):
         exe = self.find_matugen()
 
         if not exe:
+            self.busy = False
+            self.refresh_mode()
             self.toast("Matugen nebol nájdený", 6)
             return
 
@@ -1218,7 +1306,7 @@ class WallpaperWindow(Adw.ApplicationWindow):
         )
 
         left.connect(
-            "released",
+            "pressed",
             lambda *_a, p=img_path:
                 self.set_wallpaper(p, self.matugen_active)
         )
@@ -1235,7 +1323,7 @@ class WallpaperWindow(Adw.ApplicationWindow):
         )
 
         right.connect(
-            "released",
+            "pressed",
             lambda *_a, p=img_path:
                 self.set_wallpaper(p, False)
         )
@@ -1252,11 +1340,7 @@ class WallpaperWindow(Adw.ApplicationWindow):
     # NASTAVENIE WALLPAPERU
     # ================================================================
 
-    def set_wallpaper(
-        self,
-        img_path: Path,
-        run_matugen=True
-    ):
+    def set_wallpaper(self, img_path: Path, run_matugen=True):
         """
         Ľavý klik:
             wallpaper + Matugen
@@ -1264,30 +1348,39 @@ class WallpaperWindow(Adw.ApplicationWindow):
         Pravý klik:
             iba wallpaper
 
-        Rýchle kroky prebehnú hneď,
-        Matugen beží na pozadí; do dokončenia je UI zablokované.
-        Okno ostáva otvorené.
+        Spustí proces nastavenia pozadia na pozadí, bez sekania UI.
         """
-
-        if run_matugen and self.busy:
+        if self.busy:
             self.toast("Počkaj, kým dobehne prebiehajúca zmena…")
             return
 
+        self.busy = True
+        self.refresh_mode()
+
+        threading.Thread(
+            target=self._wallpaper_worker,
+            args=(img_path, run_matugen),
+            daemon=True
+        ).start()
+
+    def _wallpaper_worker(self, img_path, run_matugen):
+        error_msg = None
         try:
-
             apply_wallpaper(img_path)
-
-            self.current_wallpaper = img_path
-
         except Exception as e:
+            error_msg = str(e)
 
-            print(
-                f"Chyba pri nastavovaní pozadia: {e}"
-            )
+        GLib.idle_add(self._wallpaper_done, img_path, run_matugen, error_msg)
 
-            self.toast(f"Chyba pri nastavovaní pozadia: {e}", 6)
+    def _wallpaper_done(self, img_path, run_matugen, error_msg):
+        if error_msg:
+            self.busy = False
+            self.refresh_mode()
+            self.toast(f"Chyba pozadia: {error_msg}", 6)
+            print(f"Chyba pri nastavovaní pozadia: {error_msg}", file=sys.stderr)
+            return GLib.SOURCE_REMOVE
 
-            return
+        self.current_wallpaper = img_path
 
         if run_matugen:
             self.run_matugen(
@@ -1301,7 +1394,11 @@ class WallpaperWindow(Adw.ApplicationWindow):
                 on_success=lambda: self.mark_applied(None)
             )
         else:
+            self.busy = False
+            self.refresh_mode()
             self.toast("Pozadie nastavené")
+            
+        return GLib.SOURCE_REMOVE
 
 
 

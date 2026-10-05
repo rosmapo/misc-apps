@@ -37,6 +37,9 @@ EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp")
 CACHE_DIR = "~/.cache/wallpaper-chooser"
 CURRENT_FILE = f"{CACHE_DIR}/current"
 
+# Existuje, ak sú farby (matugen) z náhľadu a nie z trvalého pozadia
+PREVIEW_MARKER = f"{CACHE_DIR}/preview-colors"
+
 
 # ====================================================================
 # SPOLOČNÁ LOGIKA (okno aj príkazový riadok)
@@ -71,6 +74,23 @@ def read_current_wallpaper():
         return None
 
     return Path(value).expanduser() if value else None
+
+
+def preview_marker_active():
+    return Path(PREVIEW_MARKER).expanduser().exists()
+
+
+def set_preview_marker(on):
+    path = Path(PREVIEW_MARKER).expanduser()
+
+    try:
+        if on:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        else:
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def write_current_wallpaper(img_path):
@@ -130,8 +150,12 @@ def list_wallpapers(wallpaper_dir):
     )
 
 
-def apply_wallpaper(img_path):
-    """Reštart swaybg s novým obrázkom + zapamätanie (bez Matugenu)."""
+def apply_wallpaper(img_path, remember=True):
+    """Reštart swaybg s novým obrázkom (bez Matugenu).
+
+    remember=True: pozadie sa zapamätá ako trvalé (current) a farby už
+    nie sú "z náhľadu". remember=False: iba dočasný náhľad.
+    """
 
     subprocess.run(["pkill", "swaybg"], check=False)
 
@@ -143,17 +167,24 @@ def apply_wallpaper(img_path):
         stderr=subprocess.DEVNULL,
     )
 
-    write_current_wallpaper(img_path)
+    if remember:
+        write_current_wallpaper(img_path)
+        set_preview_marker(False)
 
 
-USAGE = """Použitie: wallpaper [-r | --random | -p | --permanent]
+USAGE = """Použitie: wallpaper [-r | -p | -v CESTA]
 
   (bez argumentov)   otvorí okno s výberom pozadia
   -r, --random       bez okna nastaví náhodné pozadie; ak je aktívna
                      téma matugen, spustí aj matugen, inak iba pozadie
   -p, --permanent    bez okna obnoví naposledy nastavené pozadie
                      (vhodné do autostartu); ak ho nenájde, nastaví
-                     náhodné ako pri -r
+                     náhodné ako pri -r; ak boli farby z náhľadu (-v),
+                     obnoví ich matugenom
+  -v, --preview CESTA
+                     dočasný náhľad obrázka (napr. zo swayimg):
+                     matugen aktívny -> pozadie + farby, inak iba
+                     pozadie; trvalé pozadie sa nemení
   -h, --help         táto pomoc
 """
 
@@ -195,19 +226,53 @@ def cli_fail(message):
     return 1
 
 
-def acquire_lock():
-    """Zámok: opakované spustenie nespustí dve zmeny pozadia naraz."""
+def acquire_lock(wait=False):
+    """Zámok: dve zmeny pozadia nebežia naraz (wait=True: počká)."""
 
     runtime = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
     lock = open(Path(runtime) / "wallpaper-cli.lock", "w")
 
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(
+            lock,
+            fcntl.LOCK_EX if wait else fcntl.LOCK_EX | fcntl.LOCK_NB
+        )
     except BlockingIOError:
         print("Iná zmena pozadia ešte beží.", file=sys.stderr)
         return None
 
     return lock
+
+
+def matugen_for_image(img):
+    """Spustí matugen s obrázkom (čaká). Vracia kód procesu."""
+
+    exe = find_matugen_exe()
+
+    if not exe:
+        return cli_fail("Pozadie je nastavené, ale matugen nebol nájdený.")
+
+    try:
+        r = subprocess.run(
+            [exe, "image", str(img), "--prefer", "darkness"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return cli_fail(f"Pozadie je nastavené, ale matugen zlyhal: {e}")
+
+    if r.returncode != 0:
+        return cli_fail(
+            "Pozadie je nastavené, ale matugen zlyhal: "
+            f"{r.stderr.strip()[:200]}"
+        )
+
+    write_applied_theme(None)
+
+    return 0
 
 
 def cli_random():
@@ -232,18 +297,60 @@ def cli_permanent():
     current = read_current_wallpaper()
 
     if current is not None and current.is_file():
+        # Farby z náhľadu (-v) treba vrátiť k trvalému pozadiu
+        restore_colors = preview_marker_active() and detect_matugen_active()
+
         try:
             apply_wallpaper(current)
         except Exception as e:
             return cli_fail(f"Chyba pri nastavovaní pozadia: {e}")
 
         print(f"Pozadie: {current}")
+
+        if restore_colors:
+            rc = matugen_for_image(current)
+
+            if rc != 0:
+                set_preview_marker(True)
+
+            return rc
+
         return 0
 
     # Fallback: cache sa vymazala alebo obrázok už neexistuje
     print("Uložené pozadie chýba, vyberám náhodné.", file=sys.stderr)
 
     return random_locked()
+
+
+def cli_preview(path):
+    """Dočasný náhľad obrázka; trvalé pozadie (current) sa nemení."""
+
+    if not path:
+        return cli_fail("Chýba cesta k obrázku: wallpaper -v CESTA")
+
+    img = Path(path).expanduser().resolve()
+
+    if not img.is_file():
+        return cli_fail(f"Obrázok neexistuje: {img}")
+
+    # Čaká na prebiehajúcu zmenu, aby sa náhľad nestratil
+    lock = acquire_lock(wait=True)
+
+    try:
+        apply_wallpaper(img, remember=False)
+    except Exception as e:
+        return cli_fail(f"Chyba pri nastavovaní pozadia: {e}")
+
+    print(f"Náhľad: {img}")
+
+    if not detect_matugen_active():
+        return 0
+
+    # Od teraz sú farby z náhľadu; -p ich vráti
+    set_preview_marker(True)
+
+    return matugen_for_image(img)
 
 
 def random_locked():
@@ -275,32 +382,7 @@ def random_locked():
     if not use_matugen:
         return 0
 
-    exe = find_matugen_exe()
-
-    if not exe:
-        return cli_fail("Pozadie je nastavené, ale matugen nebol nájdený.")
-
-    try:
-        r = subprocess.run(
-            [exe, "image", str(img), "--prefer", "darkness"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=120,
-        )
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return cli_fail(f"Pozadie je nastavené, ale matugen zlyhal: {e}")
-
-    if r.returncode != 0:
-        return cli_fail(
-            "Pozadie je nastavené, ale matugen zlyhal: "
-            f"{r.stderr.strip()[:200]}"
-        )
-
-    write_applied_theme(None)
-
-    return 0
+    return matugen_for_image(img)
 
 
 CSS = b"""
@@ -576,6 +658,7 @@ class WallpaperWindow(Adw.ApplicationWindow):
         """Zapamätá nastavenú tému (index alebo None) a obnoví kvačky."""
 
         self.applied_theme_index = index
+        set_preview_marker(False)
 
         if index is None:
             write_applied_theme(None)
@@ -1274,8 +1357,15 @@ if __name__ == "__main__":
         sys.exit(0)
 
     cli = None
+    args = sys.argv[1:]
 
-    if any(a in ("-p", "--permanent") for a in sys.argv[1:]):
+    if any(a in ("-v", "--preview") for a in args):
+        i = next(
+            i for i, a in enumerate(args) if a in ("-v", "--preview")
+        )
+        preview_path = args[i + 1] if i + 1 < len(args) else None
+        cli = lambda: cli_preview(preview_path)
+    elif any(a in ("-p", "--permanent") for a in args):
         cli = cli_permanent
     elif any(a in ("-r", "--random") for a in sys.argv[1:]):
         cli = cli_random
