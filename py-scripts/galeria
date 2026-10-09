@@ -134,6 +134,7 @@ VIDEO_EXTS = ('.mp4', '.mkv', '.webm', '.avi', '.mov')
 IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp')
 
 GRID_MARGIN = 10
+CHUNK = 30  # koľko dlaždíc sa postaví naraz (prvá dávka hneď, ostatné postupne)
 GRID_SPACING = 8
 
 def save_config(config):
@@ -800,6 +801,11 @@ class PreviewWindow(Adw.ApplicationWindow):
         self.thumb_queue = queue.Queue()
         self.widget_map = {}
         self.file_widgets = {}
+        self._load_gen = 0
+        self._cur_row = None
+        self._col = 0
+        self._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(8, max(2, os.cpu_count() or 4)))
 
         self.load_folder(self.current_folder)
         self.thumbnails_loaded = True
@@ -962,93 +968,83 @@ class PreviewWindow(Adw.ApplicationWindow):
                 continue
             visible.append((f, ft))
 
-        current_row = None
-        col_in_row = 0
+        self._load_gen += 1
+        self._cur_row = None
+        self._col = 0
+        placeholder = Gdk.Texture.new_for_pixbuf(self.create_placeholder())
+        self._build_chunk(visible, 0, self._load_gen, ts, cols, row_w, placeholder)
 
-        for f, file_type in visible:
-            cache_file = get_cache_path(f, ts, self.bg_color)
+    def _build_chunk(self, visible, start, gen, ts, cols, row_w, placeholder):
+        if gen != self._load_gen:
+            return False
+        end = min(start + CHUNK, len(visible))
+        for f, ft in visible[start:end]:
+            self._add_cell(f, ft, ts, cols, row_w, placeholder)
+            self._executor.submit(self._thumb_task, f, gen, ts)
+        if end < len(visible):
+            GLib.idle_add(self._build_chunk, visible, end, gen, ts, cols, row_w, placeholder)
+        return False
 
-            if cache_file.exists() and cache_file.stat().st_size > 0:
-                try:
-                    pixbuf = GdkPixbuf.Pixbuf.new_from_file(str(cache_file))
-                except Exception as e:
-                    print(f"Chyba pri načítaní cache {cache_file}: {e}")
-                    try:
-                        cache_file.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                    pixbuf = self.create_placeholder()
-                    self.thumb_queue.put(f)
-            else:
-                if cache_file.exists():
-                    try:
-                        cache_file.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                pixbuf = self.create_placeholder()
-                self.thumb_queue.put(f)
+    def _add_cell(self, f, file_type, ts, cols, row_w, placeholder):
+        image = Gtk.Image.new_from_paintable(placeholder)
+        image.set_size_request(ts, ts)
+        try:
+            image.set_pixel_size(ts)
+        except Exception:
+            pass
+        image.set_halign(Gtk.Align.CENTER)
+        image.set_valign(Gtk.Align.CENTER)
+        image.set_hexpand(True)
+        image.set_vexpand(True)
 
-            pixbuf = fit_pixbuf_contain(pixbuf, ts)
+        box = Gtk.Box()
+        box.set_size_request(ts, ts)
+        box.set_hexpand(False)
+        box.set_vexpand(False)
+        box.set_halign(Gtk.Align.CENTER)
+        box.set_valign(Gtk.Align.CENTER)
+        try:
+            box.set_overflow(Gtk.Overflow.HIDDEN)
+        except Exception:
+            pass
+        box.append(image)
 
-            texture = Gdk.Texture.new_for_pixbuf(pixbuf)
-            image = Gtk.Image.new_from_paintable(texture)
-            iw, ih = pixbuf.get_width(), pixbuf.get_height()
-            image.set_size_request(iw, ih)
-            try:
-                image.set_pixel_size(max(iw, ih))
-            except Exception:
-                pass
-            image.set_halign(Gtk.Align.CENTER)
-            image.set_valign(Gtk.Align.CENTER)
-            image.set_hexpand(True)
-            image.set_vexpand(True)
+        if self.show_tooltips:  # tooltip sa vytvorí až pri hoveri
+            box.set_has_tooltip(True)
+            box.connect("query-tooltip", self._on_query_tooltip, f)
 
-            box = Gtk.Box()
-            box.set_size_request(ts, ts)
-            box.set_hexpand(False)
-            box.set_vexpand(False)
-            box.set_halign(Gtk.Align.CENTER)
-            box.set_valign(Gtk.Align.CENTER)
-            try:
-                box.set_overflow(Gtk.Overflow.HIDDEN)
-            except Exception:
-                pass
-            box.append(image)
+        left_click = Gtk.GestureClick.new()
+        left_click.set_button(1)
+        left_click.connect("pressed", self.on_left_click, f, file_type)
+        box.add_controller(left_click)
 
-            if self.show_tooltips:
-                box.set_tooltip_text(self._make_tooltip(f))
+        right_click = Gtk.GestureClick.new()
+        right_click.set_button(3)
+        right_click.connect("pressed", self.on_right_click, f, file_type)
+        box.add_controller(right_click)
 
-            left_click = Gtk.GestureClick.new()
-            left_click.set_button(1)
-            left_click.connect("pressed", self.on_left_click, f, file_type)
-            box.add_controller(left_click)
+        middle_click = Gtk.GestureClick.new()
+        middle_click.set_button(2)
+        middle_click.connect("pressed", self.on_middle_click, f)
+        box.add_controller(middle_click)
 
-            right_click = Gtk.GestureClick.new()
-            right_click.set_button(3)
-            right_click.connect("pressed", self.on_right_click, f, file_type)
-            box.add_controller(right_click)
+        if self._cur_row is None or self._col >= cols:
+            self._cur_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=GRID_SPACING)
+            self._cur_row.set_halign(Gtk.Align.START)
+            self._cur_row.set_hexpand(False)
+            self._cur_row.set_size_request(row_w, ts)
+            self.grid_box.append(self._cur_row)
+            self._col = 0
 
-            middle_click = Gtk.GestureClick.new()
-            middle_click.set_button(2)
-            middle_click.connect("pressed", self.on_middle_click, f)
-            box.add_controller(middle_click)
+        self._cur_row.append(box)
+        self._col += 1
 
-            if current_row is None or col_in_row >= cols:
-                current_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=GRID_SPACING)
-                current_row.set_halign(Gtk.Align.START)
-                current_row.set_hexpand(False)
-                current_row.set_size_request(row_w, ts)
-                self.grid_box.append(current_row)
-                col_in_row = 0
+        self.widget_map[f] = image
+        self.file_widgets[f] = (box, file_type)
 
-            current_row.append(box)
-            col_in_row += 1
-
-            self.widget_map[f] = image
-            self.file_widgets[f] = (box, file_type)
-
-        if not self.thumb_queue.empty():
-            self.start_lazy_loading()
+    def _on_query_tooltip(self, widget, x, y, keyboard, tooltip, f):
+        tooltip.set_text(self._make_tooltip(f))
+        return True
 
     def create_placeholder(self):
         pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8,
@@ -1057,26 +1053,34 @@ class PreviewWindow(Adw.ApplicationWindow):
         pixbuf.fill((color[0]<<24) | (color[1]<<16) | (color[2]<<8) | 0xff)
         return pixbuf
 
-    def start_lazy_loading(self):
-        items = []
-        while not self.thumb_queue.empty():
-            items.append(self.thumb_queue.get())
-        if not items:
+    def _thumb_task(self, f, gen, ts):
+        """Beží vo worker vlákne: načíta miniatúru z cache alebo ju vygeneruje."""
+        if gen != self._load_gen:
             return
-
-        def process_one(f):
+        cache_file = get_cache_path(f, ts, self.bg_color)
+        pixbuf = None
+        try:
+            if cache_file.exists() and cache_file.stat().st_size > 0:
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file(str(cache_file))
+        except Exception as e:
+            print(f"Chyba pri načítaní cache {cache_file}: {e}")
+            try:
+                cache_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+        if pixbuf is None:
             pixbuf = self.generate_thumbnail(f)
-            if pixbuf and f in self.widget_map:
-                pixbuf = fit_pixbuf_contain(pixbuf, self.thumb_size)
-                texture = Gdk.Texture.new_for_pixbuf(pixbuf)
-                GLib.idle_add(self.widget_map[f].set_from_paintable, texture)
+        if pixbuf is None or gen != self._load_gen:
+            return
+        texture = Gdk.Texture.new_for_pixbuf(fit_pixbuf_contain(pixbuf, ts))
+        GLib.idle_add(self._set_thumb, f, texture, gen)
 
-        max_workers = min(8, max(2, os.cpu_count() or 4))
-
-        def worker():
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                list(executor.map(process_one, items))
-        threading.Thread(target=worker, daemon=True).start()
+    def _set_thumb(self, f, texture, gen):
+        if gen == self._load_gen:
+            img = self.widget_map.get(f)
+            if img is not None:
+                img.set_from_paintable(texture)
+        return False
 
     def generate_thumbnail(self, path):
         cache_file = get_cache_path(path, self.thumb_size, self.bg_color)
@@ -1092,12 +1096,13 @@ class PreviewWindow(Adw.ApplicationWindow):
                 ], check=True, capture_output=True)
             elif HAVE_PIL:
                 with Image.open(path) as im:
+                    im.draft('RGB', (self.thumb_size, self.thumb_size))  # JPEG: dekóduje rovno zmenšené
                     im = ImageOps.exif_transpose(im)
                     im.thumbnail((self.thumb_size, self.thumb_size), Image.LANCZOS)
                     if im.mode not in ("RGB", "RGBA"):
                         im = im.convert("RGB")
                     tmp = cache_file.with_suffix(".tmp.png")
-                    im.save(tmp, "PNG")
+                    im.save(tmp, "PNG", compress_level=1)
                     tmp.replace(cache_file)
             else:
                 subprocess.run([

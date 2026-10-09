@@ -510,7 +510,7 @@ class WallpaperWindow(Adw.ApplicationWindow):
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         self.set_title("Výber pozadia")
-        self.set_default_size(900, 600)
+        self.set_default_size(1090, 562)
 
         # ------------------------------------------------------------
         # Header
