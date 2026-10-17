@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+"""Kalendár pre waybar (GTK4) – otvorí sa kliknutím na dátum, druhé kliknutie ho zavrie.
+
+- čísla týždňov, zvýraznený dnešný deň
+- vlastná hlavička: mesiac + rok vľavo, tlačidlo "Dnes" vpravo hore
+- farby sa čítajú z ~/.config/rofi/colors.rasi (matugen), inak predvolené nižšie
+- ak je nainštalované gtk4-layer-shell, okno sa prilepí pod waybar vpravo hore
+
+Waybar:  "clock": { "on-click": "python3 ~/.config/waybar/waybar_calendar_gtk.py" }
+Balíky:  python3-gi gir1.2-gtk-4.0 [gir1.2-gtk4layershell-1.0]
+"""
+import re
+import sys
+from pathlib import Path
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+
+try:
+    gi.require_version("Gtk4LayerShell", "1.0")
+    from gi.repository import Gtk4LayerShell as LayerShell  # noqa: E402
+except (ValueError, ImportError):
+    LayerShell = None
+
+# ------------------------------------------------------------------ nastavenia
+COLORS_FILE = Path.home() / ".config/rofi/colors.rasi"
+# None = použiť priehľadnosť z colors.rasi; číslo (0–1) = vynútiť inú
+BG_ALPHA = 0.92
+MARGIN_TOP = 46        # waybar 40px + medzera
+MARGIN_RIGHT = 10
+
+DEFAULTS = {
+    "background": "rgba(22, 19, 11, 0.8)",
+    "foreground": "#d5c5a1",
+    "accent": "#e3c46d",
+    "accent_selected": "#d5c5a1",
+    "on_accent": "black",
+}
+# ---------------------------------------------------------------------------
+
+
+def load_colors():
+    """Načíta farby z ~/.config/rofi/colors.rasi (generuje matugen)."""
+    colors = dict(DEFAULTS)
+    try:
+        text = re.sub(r"/\*.*?\*/", "", COLORS_FILE.read_text(), flags=re.S)
+        found = {k: v.strip() for k, v in re.findall(r"([\w-]+)\s*:\s*([^;]+);", text)}
+    except OSError:
+        found = {}
+    mapping = {"background-color": "background", "accent": "accent",
+               "accent-selected": "accent_selected", "accent-text": "on_accent"}
+    for src, dst in mapping.items():
+        val = found.get(src, "")
+        if val and not val.startswith("@"):
+            colors[dst] = val
+    # colors.rasi nemá farbu textu – použije sa svetlá accent-selected
+    colors["foreground"] = colors["accent_selected"]
+    bg = colors["background"].strip()
+    if BG_ALPHA is not None:                  # vynútená priehľadnosť okna
+        m = re.match(r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", bg)
+        if m:
+            r, g, b = m.groups()
+        elif re.fullmatch(r"#[0-9a-fA-F]{6}", bg):
+            r, g, b = (int(bg[i:i + 2], 16) for i in (1, 3, 5))
+        else:
+            r = g = b = None
+        if r is not None:
+            colors["background"] = f"rgba({r}, {g}, {b}, {BG_ALPHA})"
+    return colors
+
+
+CSS = """
+window.cal {
+    background-color: @BG@;
+    border: 0px solid @ACC@;
+    border-radius: 14px;
+    color: @FG@;
+}
+window.cal box.wrap { padding: 12px; }
+
+/* Vlastná hlavička */
+.custom-header button {
+    background: transparent;
+    color: @FG@;
+    border: none;
+    border-radius: 8px;
+    box-shadow: none;
+    padding: 4px 8px;
+}
+.custom-header button:hover {
+    background-color: alpha(@ACCSEL@, 0.2);
+}
+.custom-header label.month-label {
+    font-weight: bold;
+    color: @FG@;
+    font-size: 1.05em;
+}
+
+window.cal calendar {
+    background: transparent;
+    color: @FG@;
+    border: none;
+    padding: 0;
+}
+window.cal calendar > grid > label {
+    margin: 2px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    min-width: 28px;
+    color: @FG@;
+}
+window.cal calendar > grid > label.day-name,
+window.cal calendar > grid > label.week-number,
+window.cal calendar > grid > label.other-month { color: @DIM@; }
+window.cal calendar > grid > label.day-number:hover {
+    background-color: alpha(@ACCSEL@, 0.35);
+}
+window.cal calendar > grid > label:selected {
+    background-color: @ACCSEL@;
+    color: @ON@;
+}
+window.cal calendar > grid > label.today {
+    background-color: @ACC@;
+    color: @ON@;
+    font-weight: bold;
+}
+window.cal button.today-btn {
+    background: transparent;
+    color: @ACC@;
+    border: 1px solid @ACC@;
+    border-radius: 8px;
+    box-shadow: none;
+    padding: 2px 10px;
+}
+window.cal button.today-btn:hover { background-color: @ACC@; color: @ON@; }
+"""
+
+
+def build_css(c):
+    css = CSS
+    repl = {"@BG@": c["background"], "@FG@": c["foreground"], "@DIM@": f"alpha({c['foreground']}, 0.55)",
+            "@ACC@": c["accent"], "@ACCSEL@": c["accent_selected"], "@ON@": c["on_accent"]}
+    for k, v in repl.items():
+        css = css.replace(k, v)
+    return css
+
+
+def apply_css(css):
+    provider = Gtk.CssProvider()
+    try:
+        provider.load_from_string(css)           # GTK >= 4.12
+    except AttributeError:
+        provider.load_from_data(css.encode())
+    Gtk.StyleContext.add_provider_for_display(
+        Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+
+
+def on_activate(app):
+    existing = app.get_active_window()
+    if existing is not None:                      # druhé kliknutie = zavrieť
+        existing.close()
+        return
+
+    apply_css(build_css(load_colors()))
+
+    win = Gtk.ApplicationWindow(application=app)
+    win.add_css_class("cal")
+    win.set_title("Kalendár")
+    win.set_resizable(False)
+    win.set_decorated(False)
+
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    box.add_css_class("wrap")
+
+    # 1. Vytvorenie samotného kalendára
+    cal = Gtk.Calendar()
+    cal.set_show_week_numbers(True)
+    cal.set_show_day_names(True)
+    cal.set_show_heading(False)  # Skryjeme vstavanú hlavičku
+
+    # 2. Vytvorenie vlastnej hlavičky (Custom Header)
+    header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+    header_box.add_css_class("custom-header")
+
+    prev_btn = Gtk.Button(icon_name="pan-start-symbolic")
+    next_btn = Gtk.Button(icon_name="pan-end-symbolic")
+    month_label = Gtk.Label()
+    month_label.add_css_class("month-label")
+
+    # Funkcia na aktualizáciu textu hlavičky (napr. "október 2026")
+    def update_header_label(*_):
+        dt = cal.get_date()
+        # %B = celý názov mesiaca, %Y = rok 4-miestne
+        month_label.set_text(dt.format("%B %Y"))
+
+    # Prepínanie mesiacov pomocou šípok
+    def prev_month(*_):
+        dt = cal.get_date()
+        cal.select_day(dt.add_months(-1))
+
+    def next_month(*_):
+        dt = cal.get_date()
+        cal.select_day(dt.add_months(1))
+
+    prev_btn.connect("clicked", prev_month)
+    next_btn.connect("clicked", next_month)
+    cal.connect("notify::month", update_header_label)
+    cal.connect("notify::year", update_header_label)
+
+    # 3. Tlačidlo "Dnes" vpravo hore
+    today_btn = Gtk.Button(label="Dnes")
+    today_btn.add_css_class("today-btn")
+    today_btn.set_hexpand(True)
+    today_btn.set_halign(Gtk.Align.END)
+    today_btn.connect("clicked", lambda *_: cal.select_day(GLib.DateTime.new_now_local()))
+
+    # Skladanie hlavičky
+    header_box.append(prev_btn)
+    header_box.append(month_label)
+    header_box.append(next_btn)
+    header_box.append(today_btn)
+
+    # Pridanie do hlavného boxu
+    box.append(header_box)
+    box.append(cal)
+
+    # Nastavíme počiatočný text hlavičky
+    update_header_label()
+
+    win.set_child(box)
+
+    # Esc zavrie
+    keys = Gtk.EventControllerKey()
+    keys.connect("key-pressed",
+                 lambda _c, keyval, *_: (win.close() or True) if keyval == Gdk.KEY_Escape else False)
+    win.add_controller(keys)
+
+    # zavrieť po strate fokusu (až po tom, čo ho okno raz dostalo)
+    state = {"seen": False}
+
+    def on_active(w, _pspec):
+        if w.is_active():
+            state["seen"] = True
+        elif state["seen"]:
+            w.close()
+
+    win.connect("notify::is-active", on_active)
+
+    if LayerShell is not None and LayerShell.is_supported():
+        LayerShell.init_for_window(win)
+        LayerShell.set_namespace(win, "waybar-calendar")
+        LayerShell.set_layer(win, LayerShell.Layer.OVERLAY)
+        LayerShell.set_anchor(win, LayerShell.Edge.TOP, True)
+        LayerShell.set_anchor(win, LayerShell.Edge.RIGHT, True)
+        LayerShell.set_margin(win, LayerShell.Edge.TOP, MARGIN_TOP)
+        LayerShell.set_margin(win, LayerShell.Edge.RIGHT, MARGIN_RIGHT)
+        LayerShell.set_keyboard_mode(win, LayerShell.KeyboardMode.ON_DEMAND)
+
+    win.present()
+
+
+def main():
+    app = Gtk.Application(application_id="local.waybar.calendar")
+    app.connect("activate", on_activate)
+    return app.run(sys.argv)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
