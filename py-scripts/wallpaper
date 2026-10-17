@@ -153,8 +153,10 @@ def list_wallpapers(wallpaper_dir):
 
 # Prechod pri zmene pozadia. Pri obnovení po štarte (-p) sa nepoužije.
 AWWW_TRANSITION = [
-    "--transition-type", "fade",     # alebo fade, wipe, center, any, random...
-    "--transition-duration", "1",    # sekundy
+    "--transition-type", "fade",     # alebo fade, wipe, center, any, wave, random...
+    "--transition-duration", "1",       # sekundy
+#    "--transition-step", "255",
+#    "--transition-pos", "0.2,0.8",     # pre grow alebo outer  
 ]
 
 
