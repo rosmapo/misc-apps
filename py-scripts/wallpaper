@@ -6,6 +6,7 @@ gi.require_version("Gdk", "4.0")
 
 import fcntl
 import hashlib
+import json
 import os
 import random
 import re
@@ -151,13 +152,139 @@ def list_wallpapers(wallpaper_dir):
     )
 
 
-# Prechod pri zmene pozadia. Pri obnovení po štarte (-p) sa nepoužije.
-AWWW_TRANSITION = [
-    "--transition-type", "fade",     # alebo fade, wipe, center, any, wave, random...
-    "--transition-duration", "1",       # sekundy
-#    "--transition-step", "255",
-#    "--transition-pos", "0.2,0.8",     # pre grow alebo outer  
+# ====================================================================
+# NASTAVENIA PRECHODOV (awww img --transition-*)
+# ====================================================================
+
+TRANSITION_FILE = f"{CACHE_DIR}/transition.json"
+
+TRANSITION_TYPES = [
+    "none", "simple", "fade", "left", "right", "top", "bottom",
+    "wipe", "wave", "grow", "center", "any", "outer", "random",
 ]
+
+# Predvolené hodnoty awww (tlačidlo "Predvolené")
+TRANSITION_DEFAULTS = {
+    "type": "fade",
+    "duration": 1.0,
+    "step": 90,
+    "angle": 45.0,
+    "pos": "0.3,0.7",
+    "wave": "20,20",
+}
+
+# Hodnoty, kým si ich používateľ nezmení (pôvodné správanie skriptu)
+TRANSITION_INITIAL = {
+    **TRANSITION_DEFAULTS,
+    "type": "fade",
+    "duration": 1.0,
+}
+
+TRANSITION_POS_ALIASES = (
+    "center", "top", "left", "right", "bottom",
+    "top-left", "top-right", "bottom-left", "bottom-right",
+)
+
+_NUM = r"-?\d+(?:\.\d+)?"
+
+
+def valid_transition_pos(text):
+    """Alias, alebo x,y (desatinné = percentá, celé = pixely)."""
+
+    text = text.strip().replace(" ", "")
+
+    return text in TRANSITION_POS_ALIASES or bool(
+        re.fullmatch(f"{_NUM},{_NUM}", text)
+    )
+
+
+def valid_transition_wave(text):
+    return bool(re.fullmatch(f"{_NUM},{_NUM}", str(text).strip()))
+
+
+def default_transition_step(transition_type):
+    """Predvolený krok awww: 2 pre typ simple, inak 90."""
+
+    return 2 if transition_type == "simple" else 90
+
+
+def load_transition_settings():
+    """Načíta nastavenia prechodov (chýbajúce/chybné hodnoty = východzie)."""
+
+    settings = dict(TRANSITION_INITIAL)
+
+    try:
+        data = json.loads(
+            Path(TRANSITION_FILE).expanduser().read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return settings
+
+    if not isinstance(data, dict):
+        return settings
+
+    if data.get("type") in TRANSITION_TYPES:
+        settings["type"] = data["type"]
+
+    for key in ("duration", "angle"):
+        try:
+            settings[key] = float(data[key])
+        except (KeyError, TypeError, ValueError):
+            pass
+
+    try:
+        step = int(data["step"])
+
+        if 0 <= step <= 255:
+            settings["step"] = step
+    except (KeyError, TypeError, ValueError):
+        pass
+
+    if isinstance(data.get("pos"), str) and valid_transition_pos(data["pos"]):
+        settings["pos"] = data["pos"].strip().replace(" ", "")
+
+    if isinstance(data.get("wave"), str) and valid_transition_wave(
+        data["wave"]
+    ):
+        settings["wave"] = data["wave"].strip().replace(" ", "")
+
+    return settings
+
+
+def save_transition_settings(settings):
+    """Uloží nastavenia prechodov (atómicky)."""
+
+    path = Path(TRANSITION_FILE).expanduser()
+    tmp = path.with_name(path.name + ".tmp")
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def transition_args(settings=None):
+    """Argumenty --transition-* pre `awww img`. Pri obnovení po štarte
+    (-p) sa nepoužijú."""
+
+    s = settings or load_transition_settings()
+
+    args = [
+        "--transition-type", s["type"],
+        "--transition-duration", f"{s['duration']:g}",
+        "--transition-angle", f"{s['angle']:g}",
+        "--transition-pos", s["pos"],
+        "--transition-wave", s["wave"],
+    ]
+
+    # Krok sa posiela len ak sa líši od predvoleného pre daný typ
+    # (awww má pre simple predvolene 2, inak 90)
+    if s["step"] != default_transition_step(s["type"]):
+        args += ["--transition-step", str(int(s["step"]))]
+
+    return args
 
 
 def awww_running():
@@ -243,7 +370,7 @@ def apply_wallpaper(img_path, remember=True, transition=True):
             "awww", "img",
             str(img_path),
             "--resize", "crop",
-            *(AWWW_TRANSITION if transition
+            *(transition_args() if transition
               else ["--transition-type", "none"]),
         ],
         stdin=subprocess.DEVNULL,
@@ -491,6 +618,233 @@ CSS = b"""
 """
 
 
+# Stručné nápovedy podľa awww-img(1)
+TRANSITION_TYPE_HELP = {
+    "none": "Zmena nastane okamžite, bez prechodu.",
+    "simple": "Jednoduché prelínanie. Nepodporuje nastavenie trvania.",
+    "fade": "Ako simple, ale používa Bézierovu krivku: "
+            "vyzerá lepšie a má menej artefaktov.",
+    "left": "Prechod ide z ľavej strany obrazovky na opačnú.",
+    "right": "Prechod ide z pravej strany obrazovky na opačnú.",
+    "top": "Prechod ide z hornej strany obrazovky na opačnú.",
+    "bottom": "Prechod ide z dolnej strany obrazovky na opačnú.",
+    "wipe": "Ako left, ale smer určuje uhol (Uhol).",
+    "wave": "Ako wipe, ale hrana prechodu je zvlnená "
+            "(Uhol a Vlna).",
+    "grow": "Rastúci kruh; jeho stred určuje Pozícia.",
+    "center": "Alias pre grow so stredom v strede obrazovky.",
+    "any": "Alias pre grow s náhodným stredom na obrazovke.",
+    "outer": "Ako grow, ale kruh sa zmenšuje; stred určuje Pozícia.",
+    "random": "Vyberie náhodný efekt.",
+}
+
+
+class TransitionSettingsDialog(Adw.PreferencesDialog):
+    """Nastavenia prechodov pri zmene pozadia (argumenty awww img).
+
+    Zmeny sa ukladajú hneď; použijú sa pri ďalšej zmene pozadia.
+    """
+
+    def __init__(self):
+        super().__init__(title="Nastavenie prechodov", search_enabled=False)
+
+        self.settings = load_transition_settings()
+
+        page = Adw.PreferencesPage()
+        group = Adw.PreferencesGroup()
+
+        page.add(group)
+        self.add(page)
+
+        # --- Typ prechodu (--transition-type) -----------------------
+        self.type_row = Adw.ComboRow(
+            title="Typ prechodu",
+            model=Gtk.StringList.new(TRANSITION_TYPES),
+            tooltip_text=(
+                "--transition-type\n"
+                "Typ prechodu. Predvolený je simple (prelínanie).\n\n"
+                + "\n".join(
+                    f"{k}: {v}" for k, v in TRANSITION_TYPE_HELP.items()
+                )
+            ),
+        )
+        self.type_row.set_selected(
+            TRANSITION_TYPES.index(self.settings["type"])
+        )
+        self.type_row.set_subtitle(
+            TRANSITION_TYPE_HELP[self.settings["type"]]
+        )
+        self.type_row.connect("notify::selected", self.on_type_changed)
+        group.add(self.type_row)
+
+        # --- Trvanie (--transition-duration) ------------------------
+        self.duration_row = Adw.SpinRow.new_with_range(0, 60, 0.1)
+        self.duration_row.set_title("Trvanie (s)")
+        self.duration_row.set_digits(1)
+        self.duration_row.set_value(self.settings["duration"])
+        self.duration_row.set_tooltip_text(
+            "--transition-duration\n"
+            "Ako dlho prechod trvá, v sekundách (môže mať desatinné "
+            "miesta).\nNefunguje s typom simple. Predvolené: 3."
+        )
+        self.duration_row.connect(
+            "notify::value",
+            lambda r, _p: self._store("duration", r.get_value()),
+        )
+        group.add(self.duration_row)
+
+        # --- Krok (--transition-step) -------------------------------
+        self.step_row = Adw.SpinRow.new_with_range(0, 255, 1)
+        self.step_row.set_title("Krok (0–255)")
+        self.step_row.set_digits(0)
+        self.step_row.set_value(self.settings["step"])
+        self.step_row.set_tooltip_text(
+            "--transition-step\n"
+            "Ako rýchlo sa prechod približuje k novému obrázku: v každom "
+            "snímku sa farby pixelov zmenia o túto hodnotu.\n"
+            "Vyššia hodnota = rýchlejší, ale prudší prechod; 255 prepne "
+            "obrázok okamžite.\n"
+            "Predvolené: 90 (pri type simple 2)."
+        )
+        self.step_row.connect(
+            "notify::value",
+            lambda r, _p: self._store("step", int(r.get_value())),
+        )
+        group.add(self.step_row)
+
+        # --- Uhol (--transition-angle) ------------------------------
+        self.angle_row = Adw.SpinRow.new_with_range(0, 360, 1)
+        self.angle_row.set_title("Uhol (°)")
+        self.angle_row.set_digits(0)
+        self.angle_row.set_value(self.settings["angle"])
+        self.angle_row.set_tooltip_text(
+            "--transition-angle\n"
+            "Uhol prechodu v stupňoch; používa sa pri wipe a wave.\n"
+            "0 = sprava doľava, 90 = zhora nadol, 270 = zdola nahor.\n"
+            "Predvolené: 45."
+        )
+        self.angle_row.connect(
+            "notify::value",
+            lambda r, _p: self._store("angle", r.get_value()),
+        )
+        group.add(self.angle_row)
+
+        # --- Pozícia (--transition-pos) -----------------------------
+        self.pos_row = Adw.EntryRow(title="Pozícia (x,y alebo alias)")
+        self.pos_row.set_text(self.settings["pos"])
+        self.pos_row.set_tooltip_text(
+            "--transition-pos\n"
+            "Stred kruhu; používa sa pri grow a outer.\n"
+            "Desatinné čísla = percentá (0.5,0.5 je stred obrazovky), "
+            "celé čísla = pixely (200,400 je 200 px zľava a 400 px "
+            "zdola).\n"
+            "Alias: center, top, left, right, bottom, top-left, "
+            "top-right, bottom-left, bottom-right.\n"
+            "Predvolené: center."
+        )
+        self.pos_row.connect("changed", self.on_pos_changed)
+        group.add(self.pos_row)
+
+        # --- Vlna (--transition-wave) -------------------------------
+        wave_w, wave_h = (
+            float(v) for v in self.settings["wave"].split(",")
+        )
+
+        self.wave_w = Gtk.SpinButton.new_with_range(0, 1000, 1)
+        self.wave_h = Gtk.SpinButton.new_with_range(0, 1000, 1)
+
+        for spin, value in ((self.wave_w, wave_w), (self.wave_h, wave_h)):
+            spin.set_value(value)
+            spin.set_valign(Gtk.Align.CENTER)
+            spin.connect("value-changed", self.on_wave_changed)
+
+        self.wave_row = Adw.ActionRow(
+            title="Vlna (šírka × výška)",
+            tooltip_text=(
+                "--transition-wave\n"
+                "Šírka a výška každej vlny; používa sa len pri type "
+                "wave.\nPredvolené: 20 × 20."
+            ),
+        )
+        self.wave_row.add_suffix(self.wave_w)
+        self.wave_row.add_suffix(Gtk.Label(label="×"))
+        self.wave_row.add_suffix(self.wave_h)
+
+        group.add(self.wave_row)
+
+        # --- Jedno tlačidlo na obnovenie všetkých predvolených hodnôt --
+        reset_group = Adw.PreferencesGroup()
+
+        reset_button = Gtk.Button(
+            label="Predvolené",
+            halign=Gtk.Align.CENTER,
+            tooltip_text=(
+                "Obnoví predvolené hodnoty awww pre všetky nastavenia: "
+                "typ fade, trvanie 1 s, krok 90, uhol 45°, pozícia "
+                "0.3,0.7, vlna 20 × 20."
+            ),
+        )
+        reset_button.add_css_class("pill")
+        reset_button.connect("clicked", lambda *_: self.reset_all())
+
+        reset_group.add(reset_button)
+        page.add(reset_group)
+
+    # ----------------------------------------------------------------
+
+    def reset_all(self):
+        """Obnoví predvolené hodnoty všetkých nastavení."""
+
+        d = TRANSITION_DEFAULTS
+
+        # Najprv typ (jeho zmena môže posunúť krok), potom ostatné
+        self.type_row.set_selected(TRANSITION_TYPES.index(d["type"]))
+        self.duration_row.set_value(d["duration"])
+        self.step_row.set_value(default_transition_step(d["type"]))
+        self.angle_row.set_value(d["angle"])
+        self.pos_row.set_text(d["pos"])
+
+        wave_w, wave_h = (float(v) for v in d["wave"].split(","))
+        self.wave_w.set_value(wave_w)
+        self.wave_h.set_value(wave_h)
+
+    def _store(self, key, value):
+        self.settings[key] = value
+        save_transition_settings(self.settings)
+
+    def on_type_changed(self, row, _pspec):
+        index = row.get_selected()
+
+        if index < 0 or index >= len(TRANSITION_TYPES):
+            return
+
+        name = TRANSITION_TYPES[index]
+        old_default = default_transition_step(self.settings["type"])
+
+        row.set_subtitle(TRANSITION_TYPE_HELP[name])
+        self._store("type", name)
+
+        # Ak bol krok predvolený, prepne sa na predvolený pre nový typ
+        if int(self.settings["step"]) == old_default:
+            self.step_row.set_value(default_transition_step(name))
+
+    def on_pos_changed(self, row):
+        text = row.get_text().strip().replace(" ", "")
+
+        if valid_transition_pos(text):
+            row.remove_css_class("error")
+            self._store("pos", text)
+        else:
+            # Neplatná hodnota sa neuloží (platí posledná platná)
+            row.add_css_class("error")
+
+    def on_wave_changed(self, *_args):
+        self._store(
+            "wave",
+            f"{self.wave_w.get_value():g},{self.wave_h.get_value():g}",
+        )
+
+
 class WallpaperWindow(Adw.ApplicationWindow):
 
     def __init__(self, app, wallpaper_dir):
@@ -671,8 +1025,16 @@ class WallpaperWindow(Adw.ApplicationWindow):
 
         self.spinner = Gtk.Spinner(visible=False)
 
-        # Vľavo: náhodné pozadie + téma; vpravo: režim (a spinner)
+        self.btn_settings = Gtk.Button(
+            icon_name="emblem-system-symbolic",
+            tooltip_text="Nastavenie prechodov",
+        )
+        self.btn_settings.connect("clicked", self.on_settings_clicked)
+
+        # Vľavo: náhodné pozadie + téma; vpravo: nastavenie (hneď pred
+        # krížikom), režim a spinner
         header.pack_start(theme_box)
+        header.pack_end(self.btn_settings)
         header.pack_end(self.mode_box)
         header.pack_end(self.spinner)
 
@@ -856,6 +1218,11 @@ class WallpaperWindow(Adw.ApplicationWindow):
         """Prečíta aktuálne pozadie z cache."""
 
         return read_current_wallpaper()
+
+    def on_settings_clicked(self, *_args):
+        """Otvorí dialóg s nastaveniami prechodov."""
+
+        TransitionSettingsDialog().present(self)
 
     def on_random_clicked(self, *_args):
         """Náhodné pozadie (správa sa ako ľavý klik), nie to aktuálne."""
