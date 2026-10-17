@@ -662,7 +662,7 @@ class TransitionSettingsDialog(Adw.PreferencesDialog):
             model=Gtk.StringList.new(TRANSITION_TYPES),
             tooltip_text=(
                 "--transition-type\n"
-                "Typ prechodu. Predvolený je simple (prelínanie).\n\n"
+                "Typ prechodu. Predvolený je fade (prelínanie).\n\n"
                 + "\n".join(
                     f"{k}: {v}" for k, v in TRANSITION_TYPE_HELP.items()
                 )
@@ -670,9 +670,6 @@ class TransitionSettingsDialog(Adw.PreferencesDialog):
         )
         self.type_row.set_selected(
             TRANSITION_TYPES.index(self.settings["type"])
-        )
-        self.type_row.set_subtitle(
-            TRANSITION_TYPE_HELP[self.settings["type"]]
         )
         self.type_row.connect("notify::selected", self.on_type_changed)
         group.add(self.type_row)
@@ -685,7 +682,7 @@ class TransitionSettingsDialog(Adw.PreferencesDialog):
         self.duration_row.set_tooltip_text(
             "--transition-duration\n"
             "Ako dlho prechod trvá, v sekundách (môže mať desatinné "
-            "miesta).\nNefunguje s typom simple. Predvolené: 3."
+            "miesta).\nNefunguje s typom simple. Predvolené: 1."
         )
         self.duration_row.connect(
             "notify::value",
@@ -730,8 +727,14 @@ class TransitionSettingsDialog(Adw.PreferencesDialog):
         group.add(self.angle_row)
 
         # --- Pozícia (--transition-pos) -----------------------------
-        self.pos_row = Adw.EntryRow(title="Pozícia (x,y alebo alias)")
-        self.pos_row.set_text(self.settings["pos"])
+        self.pos_row = Adw.ActionRow(title="Pozícia")
+        self.pos_entry = Gtk.Entry(
+            text=self.settings["pos"],
+            valign=Gtk.Align.CENTER,
+            width_chars=14,
+            xalign=1.0,
+        )
+        self.pos_row.add_suffix(self.pos_entry)
         self.pos_row.set_tooltip_text(
             "--transition-pos\n"
             "Stred kruhu; používa sa pri grow a outer.\n"
@@ -740,9 +743,9 @@ class TransitionSettingsDialog(Adw.PreferencesDialog):
             "zdola).\n"
             "Alias: center, top, left, right, bottom, top-left, "
             "top-right, bottom-left, bottom-right.\n"
-            "Predvolené: center."
+            "Predvolené: 0.3,0.7."
         )
-        self.pos_row.connect("changed", self.on_pos_changed)
+        self.pos_entry.connect("changed", self.on_pos_changed)
         group.add(self.pos_row)
 
         # --- Vlna (--transition-wave) -------------------------------
@@ -802,7 +805,7 @@ class TransitionSettingsDialog(Adw.PreferencesDialog):
         self.duration_row.set_value(d["duration"])
         self.step_row.set_value(default_transition_step(d["type"]))
         self.angle_row.set_value(d["angle"])
-        self.pos_row.set_text(d["pos"])
+        self.pos_entry.set_text(d["pos"])
 
         wave_w, wave_h = (float(v) for v in d["wave"].split(","))
         self.wave_w.set_value(wave_w)
@@ -821,7 +824,6 @@ class TransitionSettingsDialog(Adw.PreferencesDialog):
         name = TRANSITION_TYPES[index]
         old_default = default_transition_step(self.settings["type"])
 
-        row.set_subtitle(TRANSITION_TYPE_HELP[name])
         self._store("type", name)
 
         # Ak bol krok predvolený, prepne sa na predvolený pre nový typ
