@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import gi, os, sys, subprocess, threading, queue, time, hashlib, configparser, shutil, concurrent.futures, urllib.parse
+import gi, os, sys, subprocess, threading, time, hashlib, configparser, shutil, concurrent.futures, urllib.parse, json, math
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Gtk, GdkPixbuf, Gdk, GLib, Gio, Adw
@@ -18,9 +18,11 @@ DEFAULT_CONFIG = {
         'download_folder': str(Path.home() / "Downloads")
     },
     'Appearance': {
+        'layout': 'justified',
+        'row_height': '220',
         'columns': '6',
-        'background_color': '#1a1a1a',
         'window_width': '1920',
+        'background_color': '#1a1a1a',
         'show_tooltips': 'true',
         'show_notifications': 'true'
     },
@@ -70,9 +72,11 @@ FIELDS = {
         ('download_folder', 'folder', 'Priečinok pre "skopírovať" (stredné tlačidlo)'),
     ],
     'Appearance': [
-        ('columns', 'int:1:30', 'Počet stĺpcov'),
+        ('layout', 'combo:justified,grid', 'Rozloženie náhľadov (justified = riadky podľa pomeru strán, grid = pevná mriežka)'),
+        ('row_height', 'int:50:1000', 'Výška riadka (px) – len justified'),
+        ('columns', 'int:1:30', 'Počet stĺpcov – len grid'),
         ('background_color', 'color', 'Farba pozadia'),
-        ('window_width', 'int:200:10000', 'Šírka pre výpočet mriežky (px)'),
+        ('window_width', 'int:200:10000', 'Šírka pre výpočet mriežky (px) – len grid'),
         ('show_tooltips', 'bool', 'Zobrazovať tooltip s informáciami o súbore'),
         ('show_notifications', 'bool', 'Zobrazovať oznámenia po skopírovaní / orezaní'),
     ],
@@ -130,6 +134,7 @@ CONFIG_FILE = CONFIG_DIR / "config.cfg"
 COLORS_FILE = CONFIG_DIR / "colors.cfg"  # generuje matugen, aplikácia ho len číta
 CACHE_DIR = Path.home() / ".cache/preview_thumbs"
 CACHE_DIR.mkdir(exist_ok=True)
+RATIO_CACHE_FILE = CACHE_DIR / "ratios.json"  # pomery strán súborov (cesta -> [mtime_ns, size, w, h])
 
 VIDEO_EXTS = ('.mp4', '.mkv', '.webm', '.avi', '.mov')
 IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp')
@@ -137,6 +142,13 @@ IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp')
 GRID_MARGIN = 10
 CHUNK = 30  # koľko dlaždíc sa postaví naraz (prvá dávka hneď, ostatné postupne)
 GRID_SPACING = 8
+
+DEFAULT_ROW_HEIGHT = 220
+MIN_ROW_HEIGHT = 50
+MAX_ROW_HEIGHT = 1000
+THUMB_OVERSAMPLE = 1.25   # miniatúra sa generuje o štvrtinu vyššia než cieľová výška riadka
+MIN_LAYOUT_AR = 0.35      # extrémne pomery strán sa pri rozložení orežú (panorámy, veľmi úzke)
+MAX_LAYOUT_AR = 3.5
 
 def save_config(config):
     with open(CONFIG_FILE, 'w') as f:
@@ -188,12 +200,51 @@ def get_bg_color(config):
         pass
     return config['Appearance']['background_color']
 
-def get_cache_path(file_path, thumb_size=None, bg_color=None):
+def get_row_height(config):
+    try:
+        value = int(config.get('Appearance', 'row_height', fallback=str(DEFAULT_ROW_HEIGHT)))
+    except (TypeError, ValueError):
+        value = DEFAULT_ROW_HEIGHT
+    return max(MIN_ROW_HEIGHT, min(MAX_ROW_HEIGHT, value))
+
+def get_layout(config):
+    value = config.get('Appearance', 'layout', fallback='justified').strip().lower()
+    return 'grid' if value == 'grid' else 'justified'
+
+def get_columns(config):
+    try:
+        value = int(config.get('Appearance', 'columns', fallback='6'))
+    except (TypeError, ValueError):
+        value = 6
+    return max(1, min(30, value))
+
+def get_window_width(config):
+    try:
+        value = int(config.get('Appearance', 'window_width', fallback='1920'))
+    except (TypeError, ValueError):
+        value = 1920
+    return max(200, min(10000, value))
+
+def thumb_height_for(row_height):
+    return max(16, int(round(row_height * THUMB_OVERSAMPLE)))
+
+def get_cache_path(file_path, thumb_size=None, bg_color=None, justified=False):
     key = str(Path(file_path).absolute())
     if thumb_size is not None:
-        key += f"@{int(thumb_size)}"
+        # mriežka: pôvodný kľúč "@veľkosť"; justified: "@h výška" (iné rozmery, iná cache)
+        key += f"@h{int(thumb_size)}" if justified else f"@{int(thumb_size)}"
     path_hash = hashlib.md5(key.encode()).hexdigest()
     return CACHE_DIR / f"{path_hash}.png"
+
+def load_ratio_cache():
+    try:
+        with open(RATIO_CACHE_FILE, 'r') as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            return data
+    except (OSError, ValueError):
+        pass
+    return {}
 
 def hex_to_pixbuf_rgba(hex_color, alpha=0xff):
     h = (hex_color or '#1a1a1a').strip().lstrip('#')
@@ -218,6 +269,69 @@ def fit_pixbuf_contain(pixbuf, size):
     if nw == w and nh == h:
         return pixbuf
     return pixbuf.scale_simple(nw, nh, GdkPixbuf.InterpType.BILINEAR)
+
+def cover_pixbuf(pixbuf, w, h):
+    """Zmenší/zväčší pixbuf tak, aby pokryl presne w×h (stred sa zachová, okraje sa orežú)."""
+    pw, ph = pixbuf.get_width(), pixbuf.get_height()
+    if pw <= 0 or ph <= 0 or w <= 0 or h <= 0:
+        return pixbuf
+    if pw == w and ph == h:
+        return pixbuf
+    scale = max(w / pw, h / ph)
+    nw = max(w, int(math.ceil(pw * scale)))
+    nh = max(h, int(math.ceil(ph * scale)))
+    scaled = pixbuf.scale_simple(nw, nh, GdkPixbuf.InterpType.BILINEAR)
+    if scaled is None:
+        return pixbuf
+    x = (nw - w) // 2
+    y = (nh - h) // 2
+    return scaled.new_subpixbuf(x, y, w, h).copy()
+
+def justified_rows(ratios, width, target_h, gap):
+    """Justified layout. Vráti zoznam (indexy, výška_riadka, vyplnený).
+    Riadky sa naťahujú presne na šírku `width`; posledný riadok sa nenaťahuje."""
+    rows = []
+    cur = []
+    s = 0.0
+    for i, ar in enumerate(ratios):
+        cur.append(i)
+        s += ar
+        n = len(cur)
+        if s * target_h + gap * (n - 1) >= width:
+            h = (width - gap * (n - 1)) / s
+            if n > 1:
+                s2 = s - ar
+                h2 = (width - gap * (n - 2)) / s2
+                if abs(h2 - target_h) < abs(h - target_h):
+                    rows.append((cur[:-1], h2, True))
+                    cur = [i]
+                    s = ar
+                    if s * target_h >= width:   # samotný prvok vyplní riadok
+                        rows.append((cur, width / s, True))
+                        cur = []
+                        s = 0.0
+                    continue
+            rows.append((cur, h, True))
+            cur = []
+            s = 0.0
+    if cur:
+        rows.append((cur, float(target_h), False))
+    return rows
+
+def row_widths(row_ratios, h, gap, full_width=None):
+    """Celočíselné šírky dlaždíc v riadku. Pri `full_width` súčet + medzery sedí presne."""
+    widths = []
+    cum = 0.0
+    prev = 0
+    for ar in row_ratios:
+        cum += ar * h
+        pos = int(round(cum))
+        widths.append(max(1, pos - prev))
+        prev = pos
+    if full_width is not None and widths:
+        total = full_width - gap * (len(widths) - 1)
+        widths[-1] = max(1, widths[-1] + (total - sum(widths)))
+    return widths
 
 def resolve_initial_folder(arg):
     if not arg:
@@ -739,11 +853,11 @@ class PreviewWindow(Adw.ApplicationWindow):
         self.config = load_config()
         validate_shortcuts(self.config)
 
-        self.columns = int(self.config['Appearance']['columns'])
         self.spacing = GRID_SPACING
         self.margin = GRID_MARGIN
         self.bg_color = get_bg_color(self.config)
         self.hide_scrollbar = True
+        self._read_appearance()
         self.show_tooltips = self.config.getboolean('Appearance', 'show_tooltips', fallback=True)
         self.show_notifications = self.config.getboolean('Appearance', 'show_notifications', fallback=True)
         self.image_opener = self.config['Openers']['image_opener']
@@ -758,14 +872,9 @@ class PreviewWindow(Adw.ApplicationWindow):
         self.download_folder = download_folder if download_folder.exists() else Path.home() / "Downloads"
         self.download_folder.mkdir(exist_ok=True)
 
-        window_width = int(self.config.get('Appearance', 'window_width', fallback='1920'))
-
-        available_width = window_width - 2 * GRID_MARGIN - (self.columns - 1) * GRID_SPACING
-        self.thumb_size = max(16, available_width // max(1, self.columns))
         self._fixed_layout_width = None
-
         self.thumbnails_loaded = False
-        self.set_default_size(window_width, 1080)
+        self.set_default_size(self.window_width, 1080)
         self.fullscreen()
         self._apply_css()
 
@@ -811,20 +920,29 @@ class PreviewWindow(Adw.ApplicationWindow):
         key_controller.connect("key-pressed", self.on_key_press)
         self.add_controller(key_controller)
 
-        self.thumb_queue = queue.Queue()
         self.widget_map = {}
         self.file_widgets = {}
+        self.all_files = []
         self._load_gen = 0
-        self._cur_row = None
+        self._cur_row = None          # len grid: rozostavaný riadok a stĺpec
         self._col = 0
+        self._recalc_attempts = 0
+        self._laid_out_width = None   # justified: šírka, pre ktorú je mriežka práve postavená
+        self._pending_width = None
+        self._relayout_id = 0
+        self._ratio_cache = load_ratio_cache()
+        self._ratio_lock = threading.Lock()
+        self._ratio_dirty = False
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=min(8, max(2, os.cpu_count() or 4)))
+
+        # šírka okna sa zistí až po alokácii -> sledujeme ju a podľa nej prekreslíme riadky
+        self.scrolled.add_tick_callback(self._on_tick)
 
         self.load_folder(self.current_folder)
         self.thumbnails_loaded = True
 
-        self._recalc_attempts = 0
-        self.connect("realize", self.on_window_realize)
+        self.connect("realize", self.on_window_realize)   # len grid
 
         # živé prepnutie farby, keď matugen prepíše colors.cfg
         self._bg_monitor = None
@@ -892,17 +1010,208 @@ class PreviewWindow(Adw.ApplicationWindow):
         if hasattr(self, 'scrolled') and self.scrolled is not None:
             self.scrolled.set_overlay_scrolling(True)
 
+    # --- Sledovanie šírky okna ---
+    def _read_appearance(self):
+        self.layout = get_layout(self.config)
+        self.columns = get_columns(self.config)
+        self.window_width = get_window_width(self.config)
+        self.row_height = get_row_height(self.config)
+        self.thumb_h = thumb_height_for(self.row_height)
+        avail = self.window_width - 2 * GRID_MARGIN - (self.columns - 1) * GRID_SPACING
+        self.thumb_size = max(16, avail // max(1, self.columns))
+
+    def _on_tick(self, widget, frame_clock):
+        if self.layout != 'justified':
+            return GLib.SOURCE_CONTINUE
+        w = self.scrolled.get_width()
+        if w > 1 and w != self._laid_out_width and w != self._pending_width:
+            self._pending_width = w
+            if self._relayout_id:
+                GLib.source_remove(self._relayout_id)
+            delay = 30 if self._laid_out_width is None else 150
+            self._relayout_id = GLib.timeout_add(delay, self._do_relayout)
+        return GLib.SOURCE_CONTINUE
+
+    def _do_relayout(self):
+        self._relayout_id = 0
+        self._pending_width = None
+        self._start_layout()
+        return False
+
+    def _make_tooltip(self, path):
+        try:
+            stat = path.stat()
+            size = format_size(stat.st_size)
+            mtime = time.strftime("%d.%m.%Y %H:%M", time.localtime(stat.st_mtime))
+            res = ""
+            if path.suffix.lower() in IMAGE_EXTS:
+                try:
+                    info = GdkPixbuf.Pixbuf.get_file_info(str(path))
+                    if info and info[1] > 0:
+                        res = f"\n{info[1]} × {info[2]}"
+                except Exception:
+                    pass
+            return f"{path.name}\n{size}  •  {mtime}{res}"
+        except Exception:
+            return path.name
+
+    def load_folder(self, folder):
+        if not folder.exists():
+            print(f"Adresár neexistuje: {folder}")
+            return
+        self.current_folder = folder
+
+        all_files = [f for f in folder.iterdir() if f.suffix.lower() in IMAGE_EXTS + VIDEO_EXTS]
+
+        sort_by = self.config.get('Sorting', 'sort_by', fallback='date').strip().lower()
+        sort_order = self.config.get('Sorting', 'sort_order', fallback='descending').strip().lower()
+        reverse = (sort_order == 'descending')
+
+        if sort_by == 'name':
+            all_files.sort(key=lambda f: f.name.lower(), reverse=reverse)
+        else:
+            all_files.sort(key=lambda f: f.stat().st_mtime, reverse=reverse)
+
+        self.all_files = all_files
+        self.set_title(f"Galéria – {folder}")
+        self._start_layout()
+
+    # --- Pomery strán ---
+    def _probe_image(self, path):
+        if HAVE_PIL:
+            try:
+                with Image.open(path) as im:
+                    w, h = im.size
+                    try:
+                        orient = im.getexif().get(0x0112, 1)
+                    except Exception:
+                        orient = 1
+                    if orient in (5, 6, 7, 8):
+                        w, h = h, w
+                return w, h
+            except Exception:
+                pass
+        try:
+            info = GdkPixbuf.Pixbuf.get_file_info(str(path))
+            if info and info[1] > 0 and info[2] > 0:
+                return info[1], info[2]
+        except Exception:
+            pass
+        return None
+
+    def _probe_video(self, path):
+        try:
+            out = subprocess.run([
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=width,height:stream_side_data=rotation:stream_tags=rotate",
+                "-of", "json", str(path)
+            ], capture_output=True, text=True, timeout=20, check=True).stdout
+            st = json.loads(out)["streams"][0]
+            w, h = int(st["width"]), int(st["height"])
+            rot = 0
+            for sd in st.get("side_data_list", []):
+                if "rotation" in sd:
+                    rot = int(float(sd["rotation"]))
+            if not rot:
+                rot = int(float(st.get("tags", {}).get("rotate", 0)))
+            if abs(rot) % 180 == 90:
+                w, h = h, w
+            return w, h
+        except Exception:
+            return None
+
+    def _probe_ratio(self, f, gen):
+        """Beží vo worker vlákne. Vráti pomer strán w/h (z cache alebo z hlavičky súboru)."""
+        if gen != self._load_gen:
+            return None
+        is_video = f.suffix.lower() in VIDEO_EXTS
+        fallback = 16 / 9 if is_video else 3 / 2
+        try:
+            st = f.stat()
+        except OSError:
+            return fallback
+        key = str(f)
+        entry = self._ratio_cache.get(key)
+        if (isinstance(entry, list) and len(entry) == 4
+                and entry[0] == st.st_mtime_ns and entry[1] == st.st_size
+                and entry[2] > 0 and entry[3] > 0):
+            return entry[2] / entry[3]
+        dims = self._probe_video(f) if is_video else self._probe_image(f)
+        if not dims or dims[0] <= 0 or dims[1] <= 0:
+            return fallback
+        self._ratio_cache[key] = [st.st_mtime_ns, st.st_size, dims[0], dims[1]]
+        self._ratio_dirty = True
+        return dims[0] / dims[1]
+
+    def _save_ratio_cache(self):
+        if not self._ratio_dirty:
+            return
+        with self._ratio_lock:
+            self._ratio_dirty = False
+            data = dict(self._ratio_cache)
+            try:
+                tmp = RATIO_CACHE_FILE.with_suffix(".tmp")
+                with open(tmp, 'w') as fh:
+                    json.dump(data, fh)
+                tmp.replace(RATIO_CACHE_FILE)
+            except Exception as e:
+                print(f"Nepodarilo sa uložiť cache pomerov: {e}")
+
+    # --- Rozloženie ---
+    def _start_layout(self):
+        """Zahodí aktuálne dlaždice a postaví mriežku odznova pre aktuálnu šírku okna."""
+        if self._relayout_id:
+            GLib.source_remove(self._relayout_id)
+            self._relayout_id = 0
+        self._pending_width = None
+        self._load_gen += 1
+        gen = self._load_gen
+
+        child = self.grid_box.get_first_child()
+        while child is not None:
+            self.grid_box.remove(child)
+            child = self.grid_box.get_first_child()
+        self.widget_map.clear()
+        self.file_widgets.clear()
+
+        if self.layout == 'grid':
+            self._laid_out_width = None
+            self._start_grid_layout(gen)
+            return
+
+        width = self.scrolled.get_width()
+        if width <= 1:
+            # okno ešte nemá veľkosť; _on_tick spustí rozloženie hneď, ako ju bude mať
+            self._laid_out_width = None
+            return
+        self._laid_out_width = width
+
+        visible = self._visible_files()
+
+        threading.Thread(target=self._layout_worker, args=(visible, gen, width), daemon=True).start()
+
+    def _visible_files(self):
+        visible = []
+        for f in self.all_files:
+            ft = 'image' if f.suffix.lower() in IMAGE_EXTS else 'video'
+            if self.current_filter == 'images' and ft != 'image':
+                continue
+            if self.current_filter == 'videos' and ft != 'video':
+                continue
+            visible.append((f, ft))
+        return visible
+
+    # --- Pôvodné rozloženie: pevná mriežka štvorcových dlaždíc (layout = grid) ---
     def on_window_realize(self, widget):
+        if self.layout != 'grid':
+            return
         self._recalc_attempts = 0
         GLib.idle_add(self._lock_layout_width)
         GLib.timeout_add(50, self._lock_layout_width)
         GLib.timeout_add(200, self.recalculate_if_needed)
 
     def _viewport_width(self):
-        try:
-            return max(200, int(self.config.get('Appearance', 'window_width', fallback='1920')))
-        except (TypeError, ValueError):
-            return 1920
+        return get_window_width(self.config)
 
     def _lock_layout_width(self):
         self._fixed_layout_width = self._viewport_width()
@@ -938,6 +1247,8 @@ class PreviewWindow(Adw.ApplicationWindow):
             self.grid_wrap.set_size_request(row_w, -1)
 
     def recalculate_if_needed(self):
+        if self.layout != 'grid':
+            return False
         self._lock_layout_width()
         new_ts = self._compute_thumb_size()
         if abs(new_ts - self.thumb_size) >= 1:
@@ -945,71 +1256,16 @@ class PreviewWindow(Adw.ApplicationWindow):
             self.load_folder(self.current_folder)
         return False
 
-    def _make_tooltip(self, path):
-        try:
-            stat = path.stat()
-            size = format_size(stat.st_size)
-            mtime = time.strftime("%d.%m.%Y %H:%M", time.localtime(stat.st_mtime))
-            res = ""
-            if path.suffix.lower() in IMAGE_EXTS:
-                try:
-                    info = GdkPixbuf.Pixbuf.get_file_info(str(path))
-                    if info and info[1] > 0:
-                        res = f"\n{info[1]} × {info[2]}"
-                except Exception:
-                    pass
-            return f"{path.name}\n{size}  •  {mtime}{res}"
-        except Exception:
-            return path.name
-
-    def load_folder(self, folder):
-        if not folder.exists():
-            print(f"Adresár neexistuje: {folder}")
-            return
-        self.current_folder = folder
-        child = self.grid_box.get_first_child()
-        while child is not None:
-            self.grid_box.remove(child)
-            child = self.grid_box.get_first_child()
-        self.widget_map.clear()
-        self.file_widgets.clear()
-        self.thumb_queue = queue.Queue()
-
-        all_files = [f for f in folder.iterdir() if f.suffix.lower() in IMAGE_EXTS + VIDEO_EXTS]
-
-        sort_by = self.config.get('Sorting', 'sort_by', fallback='date').strip().lower()
-        sort_order = self.config.get('Sorting', 'sort_order', fallback='descending').strip().lower()
-        reverse = (sort_order == 'descending')
-
-        if sort_by == 'name':
-            all_files.sort(key=lambda f: f.name.lower(), reverse=reverse)
-        else:
-            all_files.sort(key=lambda f: f.stat().st_mtime, reverse=reverse)
-
-        self.all_files = all_files
-        self.load_thumbnails(all_files)
-        self.set_title(f"Galéria – {folder}")
-
-    def load_thumbnails(self, files):
+    def _start_grid_layout(self, gen):
         ts = self.thumb_size
         cols = max(1, self.columns)
         row_w = cols * ts + (cols - 1) * GRID_SPACING
         self.grid_box.set_size_request(row_w, -1)
-
-        visible = []
-        for f in files:
-            ft = 'image' if f.suffix.lower() in IMAGE_EXTS else 'video'
-            if self.current_filter == 'images' and ft != 'image':
-                continue
-            if self.current_filter == 'videos' and ft != 'video':
-                continue
-            visible.append((f, ft))
-
-        self._load_gen += 1
+        visible = self._visible_files()
         self._cur_row = None
         self._col = 0
-        placeholder = Gdk.Texture.new_for_pixbuf(self.create_placeholder())
-        self._build_chunk(visible, 0, self._load_gen, ts, cols, row_w, placeholder)
+        placeholder = Gdk.Texture.new_for_pixbuf(self.create_placeholder_grid())
+        self._build_chunk(visible, 0, gen, ts, cols, row_w, placeholder)
 
     def _build_chunk(self, visible, start, gen, ts, cols, row_w, placeholder):
         if gen != self._load_gen:
@@ -1017,7 +1273,7 @@ class PreviewWindow(Adw.ApplicationWindow):
         end = min(start + CHUNK, len(visible))
         for f, ft in visible[start:end]:
             self._add_cell(f, ft, ts, cols, row_w, placeholder)
-            self._executor.submit(self._thumb_task, f, gen, ts)
+            self._executor.submit(self._thumb_task_grid, f, gen, ts)
         if end < len(visible):
             GLib.idle_add(self._build_chunk, visible, end, gen, ts, cols, row_w, placeholder)
         return False
@@ -1079,19 +1335,15 @@ class PreviewWindow(Adw.ApplicationWindow):
         self.widget_map[f] = image
         self.file_widgets[f] = (box, file_type)
 
-    def _on_query_tooltip(self, widget, x, y, keyboard, tooltip, f):
-        tooltip.set_text(self._make_tooltip(f))
-        return True
-
-    def create_placeholder(self):
+    def create_placeholder_grid(self):
         pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8,
                                       self.thumb_size, self.thumb_size)
         color = (50, 50, 50)
         pixbuf.fill((color[0]<<24) | (color[1]<<16) | (color[2]<<8) | 0xff)
         return pixbuf
 
-    def _thumb_task(self, f, gen, ts):
-        """Beží vo worker vlákne: načíta miniatúru z cache alebo ju vygeneruje."""
+    def _thumb_task_grid(self, f, gen, ts):
+        """Beží vo worker vlákne (grid): načíta štvorcovú miniatúru z cache alebo ju vygeneruje."""
         if gen != self._load_gen:
             return
         cache_file = get_cache_path(f, ts, self.bg_color)
@@ -1106,20 +1358,13 @@ class PreviewWindow(Adw.ApplicationWindow):
             except Exception:
                 pass
         if pixbuf is None:
-            pixbuf = self.generate_thumbnail(f)
+            pixbuf = self.generate_thumbnail_grid(f)
         if pixbuf is None or gen != self._load_gen:
             return
         texture = Gdk.Texture.new_for_pixbuf(fit_pixbuf_contain(pixbuf, ts))
         GLib.idle_add(self._set_thumb, f, texture, gen)
 
-    def _set_thumb(self, f, texture, gen):
-        if gen == self._load_gen:
-            img = self.widget_map.get(f)
-            if img is not None:
-                img.set_from_paintable(texture)
-        return False
-
-    def generate_thumbnail(self, path):
+    def generate_thumbnail_grid(self, path):
         cache_file = get_cache_path(path, self.thumb_size, self.bg_color)
         try:
             if path.suffix.lower() in VIDEO_EXTS:
@@ -1151,6 +1396,189 @@ class PreviewWindow(Adw.ApplicationWindow):
                 ], check=True, capture_output=True)
             pb = GdkPixbuf.Pixbuf.new_from_file(str(cache_file))
             return fit_pixbuf_contain(pb, self.thumb_size)
+        except Exception as e:
+            print(f"Chyba pri generovaní thumbnailu pre {path}: {e}")
+            return None
+
+    # --- Nové rozloženie: justified (layout = justified) ---
+    def _layout_worker(self, visible, gen, width):
+        """Zistí pomery strán paralelne (s cache), potom odovzdá rozloženie hlavnému vláknu."""
+        files = [f for f, _ in visible]
+        try:
+            ratios = list(self._executor.map(lambda f: self._probe_ratio(f, gen), files))
+        except Exception as e:
+            print(f"Chyba pri zisťovaní pomerov strán: {e}")
+            return
+        self._save_ratio_cache()
+        if gen != self._load_gen:
+            return
+        GLib.idle_add(self._build_layout, visible, ratios, gen, width)
+
+    def _build_layout(self, visible, ratios, gen, width):
+        if gen != self._load_gen:
+            return False
+        avail = max(100, width - 2 * GRID_MARGIN)
+        ars = [r if r else 1.5 for r in ratios]
+        layout_ars = [min(max(r, MIN_LAYOUT_AR), MAX_LAYOUT_AR) for r in ars]
+
+        plan = []
+        for idxs, h, full in justified_rows(layout_ars, avail, self.row_height, GRID_SPACING):
+            hi = max(1, int(round(h)))
+            widths = row_widths([layout_ars[i] for i in idxs], h, GRID_SPACING,
+                                full_width=avail if full else None)
+            items = [(visible[i][0], visible[i][1], w, ars[i]) for i, w in zip(idxs, widths)]
+            row_w = sum(widths) + GRID_SPACING * (len(widths) - 1)
+            plan.append((hi, row_w, items))
+
+        self.grid_wrap.set_margin_start(GRID_MARGIN)
+        self.grid_wrap.set_margin_end(GRID_MARGIN)
+        self.grid_box.set_size_request(avail, -1)
+        self.grid_wrap.set_size_request(-1, -1)   # po prepnutí z mriežky zrušiť jej pevnú šírku
+        placeholder = Gdk.Texture.new_for_pixbuf(self.create_placeholder())
+        self._build_rows_chunk(plan, 0, gen, placeholder)
+        return False
+
+    def _build_rows_chunk(self, plan, start, gen, placeholder):
+        if gen != self._load_gen:
+            return False
+        count = 0
+        i = start
+        while i < len(plan) and count < CHUNK:
+            hi, row_w, items = plan[i]
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=GRID_SPACING)
+            row.set_halign(Gtk.Align.START)
+            row.set_hexpand(False)
+            row.set_size_request(row_w, hi)
+            for f, ft, w, ar in items:
+                row.append(self._make_cell(f, ft, w, hi, placeholder))
+                self._executor.submit(self._thumb_task, f, gen, w, hi, ar)
+            self.grid_box.append(row)
+            count += len(items)
+            i += 1
+        if i < len(plan):
+            GLib.idle_add(self._build_rows_chunk, plan, i, gen, placeholder)
+        return False
+
+    def _make_cell(self, f, file_type, w, h, placeholder):
+        picture = Gtk.Picture.new_for_paintable(placeholder)
+        try:
+            picture.set_content_fit(Gtk.ContentFit.COVER)
+        except Exception:
+            pass
+        picture.set_can_shrink(True)
+        picture.set_hexpand(True)
+        picture.set_vexpand(True)
+
+        box = Gtk.Box()
+        box.set_size_request(w, h)
+        box.set_hexpand(False)
+        box.set_vexpand(False)
+        box.set_halign(Gtk.Align.START)
+        box.set_valign(Gtk.Align.START)
+        try:
+            box.set_overflow(Gtk.Overflow.HIDDEN)
+        except Exception:
+            pass
+        box.append(picture)
+
+        if self.show_tooltips:  # tooltip sa vytvorí až pri hoveri
+            box.set_has_tooltip(True)
+            box.connect("query-tooltip", self._on_query_tooltip, f)
+
+        left_click = Gtk.GestureClick.new()
+        left_click.set_button(1)
+        left_click.connect("pressed", self.on_left_click, f, file_type)
+        box.add_controller(left_click)
+
+        right_click = Gtk.GestureClick.new()
+        right_click.set_button(3)
+        right_click.connect("pressed", self.on_right_click, f, file_type)
+        box.add_controller(right_click)
+
+        middle_click = Gtk.GestureClick.new()
+        middle_click.set_button(2)
+        middle_click.connect("pressed", self.on_middle_click, f)
+        box.add_controller(middle_click)
+
+        self.widget_map[f] = picture
+        self.file_widgets[f] = (box, file_type)
+        return box
+
+    def _on_query_tooltip(self, widget, x, y, keyboard, tooltip, f):
+        tooltip.set_text(self._make_tooltip(f))
+        return True
+
+    def create_placeholder(self):
+        pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, 8, 8)
+        color = (50, 50, 50)
+        pixbuf.fill((color[0]<<24) | (color[1]<<16) | (color[2]<<8) | 0xff)
+        return pixbuf
+
+    def _thumb_task(self, f, gen, w, h, ar):
+        """Beží vo worker vlákne: načíta miniatúru z cache alebo ju vygeneruje."""
+        if gen != self._load_gen:
+            return
+        cache_file = get_cache_path(f, self.thumb_h, justified=True)
+        pixbuf = None
+        try:
+            if cache_file.exists() and cache_file.stat().st_size > 0:
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file(str(cache_file))
+        except Exception as e:
+            print(f"Chyba pri načítaní cache {cache_file}: {e}")
+            try:
+                cache_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+        if pixbuf is None:
+            pixbuf = self.generate_thumbnail(f, ar)
+        if pixbuf is None or gen != self._load_gen:
+            return
+        texture = Gdk.Texture.new_for_pixbuf(cover_pixbuf(pixbuf, w, h))
+        GLib.idle_add(self._set_thumb, f, texture, gen)
+
+    def _set_thumb(self, f, texture, gen):
+        if gen == self._load_gen:
+            w = self.widget_map.get(f)
+            if isinstance(w, Gtk.Picture):
+                w.set_paintable(texture)
+            elif w is not None:
+                w.set_from_paintable(texture)
+        return False
+
+    def generate_thumbnail(self, path, ar=1.5):
+        th = self.thumb_h
+        cache_file = get_cache_path(path, th, justified=True)
+        try:
+            if path.suffix.lower() in VIDEO_EXTS:
+                # -s určuje dlhšiu stranu miniatúry
+                size = max(th, int(round(th * max(ar, 1.0))))
+                subprocess.run([
+                    "ffmpegthumbnailer",
+                    "-i", str(path),
+                    "-o", str(cache_file),
+                    "-s", str(size),
+                    "-q", "10",
+                    "-f"
+                ], check=True, capture_output=True)
+            elif HAVE_PIL:
+                with Image.open(path) as im:
+                    im.draft('RGB', (th, th))  # JPEG: dekóduje rovno zmenšené
+                    im = ImageOps.exif_transpose(im)
+                    im.thumbnail((100000, th), Image.LANCZOS)  # výška = th, šírka podľa pomeru
+                    if im.mode not in ("RGB", "RGBA"):
+                        im = im.convert("RGB")
+                    tmp = cache_file.with_suffix(".tmp.png")
+                    im.save(tmp, "PNG", compress_level=1)
+                    tmp.replace(cache_file)
+            else:
+                subprocess.run([
+                    "convert",
+                    str(path),
+                    "-auto-orient",
+                    "-thumbnail", f"x{th}",
+                    str(cache_file)
+                ], check=True, capture_output=True)
+            return GdkPixbuf.Pixbuf.new_from_file(str(cache_file))
         except Exception as e:
             print(f"Chyba pri generovaní thumbnailu pre {path}: {e}")
             return None
@@ -1332,11 +1760,11 @@ class PreviewWindow(Adw.ApplicationWindow):
 
     def apply_settings_from_dialog(self):
         self.config = load_config()
-        self.columns = int(self.config['Appearance']['columns'])
         self.spacing = GRID_SPACING
         self.margin = GRID_MARGIN
         self.bg_color = get_bg_color(self.config)
         self.hide_scrollbar = True
+        self._read_appearance()
         self.show_tooltips = self.config.getboolean('Appearance', 'show_tooltips', fallback=True)
         self.show_notifications = self.config.getboolean('Appearance', 'show_notifications', fallback=True)
         self.image_opener = self.config['Openers']['image_opener']
@@ -1350,7 +1778,8 @@ class PreviewWindow(Adw.ApplicationWindow):
         self.download_folder = download_folder if download_folder.exists() else Path.home() / "Downloads"
         self.download_folder.mkdir(exist_ok=True)
         self._apply_css()
-        self._apply_grid_geometry()
+        if self.layout == 'grid':
+            self._apply_grid_geometry()
         self.load_folder(self.current_folder)
 
 class ShortcutRecorder(Gtk.Box):
@@ -1458,6 +1887,7 @@ class SettingsDialog(Adw.Window):
         self._active_chooser = None
         self._section_pages = {}
         self._list_rows = {}
+        self._rows = {}
 
         toolbar = Adw.ToolbarView()
         self.set_content(toolbar)
@@ -1547,6 +1977,8 @@ class SettingsDialog(Adw.Window):
         self.content_page.set_child(content_toolbar)
         self.split.set_content(self.content_page)
 
+        self._update_layout_rows()
+
         first_section = next(iter(FIELDS.keys()))
         self.sidebar_list.select_row(self._list_rows[first_section])
 
@@ -1588,6 +2020,7 @@ class SettingsDialog(Adw.Window):
         for key, field_type, label_text in fields:
             current_value = self.config.get(section, key, fallback='')
             row = self._build_row(section, key, field_type, label_text, current_value)
+            self._rows[(section, key)] = row
             group.add(row)
 
         clamp.set_child(group)
@@ -1600,6 +2033,16 @@ class SettingsDialog(Adw.Window):
         self.config[section][key] = value
         save_config(self.config)
         self.main_window.apply_settings_from_dialog()
+        if section == 'Appearance' and key == 'layout':
+            self._update_layout_rows()
+
+    def _update_layout_rows(self):
+        """Nastavenia neaktívneho rozloženia sa zosivia (row_height = justified; columns, window_width = grid)."""
+        grid = self.config.get('Appearance', 'layout', fallback='justified').strip().lower() == 'grid'
+        for key, only_grid in (('row_height', False), ('columns', True), ('window_width', True)):
+            row = self._rows.get(('Appearance', key))
+            if row is not None:
+                row.set_sensitive(grid == only_grid)
 
     def _build_row(self, section, key, field_type, label_text, current_value):
         if field_type == 'label':
