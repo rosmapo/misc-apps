@@ -22,6 +22,7 @@ DEFAULT_CONFIG = {
         'row_height': '220',
         'columns': '6',
         'window_width': '1920',
+        'corner_radius': '12',
         'background_color': '#1a1a1a',
         'show_tooltips': 'true',
         'show_notifications': 'true'
@@ -75,6 +76,7 @@ FIELDS = {
         ('layout', 'combo:justified,grid', 'Rozloženie náhľadov (justified = riadky podľa pomeru strán, grid = pevná mriežka)'),
         ('row_height', 'int:50:1000', 'Výška riadka (px) – len justified'),
         ('columns', 'int:1:30', 'Počet stĺpcov – len grid'),
+        ('corner_radius', 'int:0:100', 'Zaoblenie rohov náhľadov (px, 0 = bez zaoblenia)'),
         ('background_color', 'color', 'Farba pozadia'),
         ('window_width', 'int:200:10000', 'Šírka pre výpočet mriežky (px) – len grid'),
         ('show_tooltips', 'bool', 'Zobrazovať tooltip s informáciami o súbore'),
@@ -217,6 +219,13 @@ def get_columns(config):
     except (TypeError, ValueError):
         value = 6
     return max(1, min(30, value))
+
+def get_corner_radius(config):
+    try:
+        value = int(config.get('Appearance', 'corner_radius', fallback='12'))
+    except (TypeError, ValueError):
+        value = 12
+    return max(0, min(100, value))
 
 def get_window_width(config):
     try:
@@ -993,6 +1002,9 @@ class PreviewWindow(Adw.ApplicationWindow):
             scrolledwindow {{
                 background: transparent;
             }}
+            .thumb-cell {{
+                border-radius: {self.corner_radius}px;
+            }}
             flowboxchild,
             flowboxchild:focus,
             flowboxchild:focus-visible,
@@ -1016,6 +1028,7 @@ class PreviewWindow(Adw.ApplicationWindow):
         self.columns = get_columns(self.config)
         self.window_width = get_window_width(self.config)
         self.row_height = get_row_height(self.config)
+        self.corner_radius = get_corner_radius(self.config)
         self.thumb_h = thumb_height_for(self.row_height)
         avail = self.window_width - 2 * GRID_MARGIN - (self.columns - 1) * GRID_SPACING
         self.thumb_size = max(16, avail // max(1, self.columns))
@@ -1300,6 +1313,7 @@ class PreviewWindow(Adw.ApplicationWindow):
             box.set_overflow(Gtk.Overflow.HIDDEN)
         except Exception:
             pass
+        box.add_css_class("thumb-cell")
         box.append(image)
 
         if self.show_tooltips:  # tooltip sa vytvorí až pri hoveri
@@ -1479,6 +1493,7 @@ class PreviewWindow(Adw.ApplicationWindow):
             box.set_overflow(Gtk.Overflow.HIDDEN)
         except Exception:
             pass
+        box.add_css_class("thumb-cell")
         box.append(picture)
 
         if self.show_tooltips:  # tooltip sa vytvorí až pri hoveri
